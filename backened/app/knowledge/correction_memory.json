@@ -1,0 +1,618 @@
+{
+  "version": 1,
+  "patterns": {
+    "value must start with 'X'": {
+      "signature": "value must start with 'X'",
+      "seen": 122,
+      "corrections": [
+        {
+          "accepted": "TRF123",
+          "rejected": "nope",
+          "step": "Tariff Code",
+          "count": 58,
+          "first_seen": "2026-08-13T14:26:07"
+        },
+        {
+          "accepted": "TRF042",
+          "rejected": "NOPE",
+          "step": "Tariff Code",
+          "count": 58,
+          "first_seen": "2026-08-13T14:25:53"
+        },
+        {
+          "accepted": "SCH981",
+          "rejected": "sch981",
+          "step": "Unique Operation ID",
+          "count": 1,
+          "first_seen": "2026-08-13T15:36:29"
+        },
+        {
+          "accepted": "SCH342",
+          "rejected": "hr",
+          "step": "Unique Operation ID",
+          "count": 1,
+          "first_seen": "2026-08-14T15:24:33"
+        },
+        {
+          "accepted": "NOT213",
+          "rejected": "tes987",
+          "step": "Unique Notification ID",
+          "count": 1,
+          "first_seen": "2026-08-14T15:26:42"
+        }
+      ],
+      "last_seen": "2026-08-18T15:14:26"
+    },
+    "value cannot be a generic placeholder": {
+      "signature": "value cannot be a generic placeholder",
+      "seen": 62,
+      "corrections": [
+        {
+          "accepted": "45.50",
+          "rejected": "abc",
+          "step": "Unit Rate",
+          "count": 58,
+          "first_seen": "2026-08-13T14:26:07"
+        },
+        {
+          "accepted": "ACTIVE",
+          "rejected": "o",
+          "step": "Valid Tariff Status",
+          "count": 1,
+          "first_seen": "2026-08-13T14:39:12"
+        },
+        {
+          "accepted": "21",
+          "rejected": "g",
+          "step": "Order ID",
+          "count": 1,
+          "first_seen": "2026-08-14T13:44:47"
+        },
+        {
+          "accepted": "09",
+          "rejected": "S",
+          "step": "Shipping Cost",
+          "count": 1,
+          "first_seen": "2026-08-14T13:47:55"
+        },
+        {
+          "accepted": "PUSH",
+          "rejected": "E",
+          "step": "Valid Notification Type",
+          "count": 1,
+          "first_seen": "2026-08-18T10:42:10"
+        }
+      ],
+      "last_seen": "2026-08-18T10:42:10"
+    },
+    "value must be one of: active, inactive": {
+      "signature": "value must be one of: active, inactive",
+      "seen": 58,
+      "corrections": [
+        {
+          "accepted": "ACTIVE",
+          "rejected": "MAYBE",
+          "step": "Status",
+          "count": 58,
+          "first_seen": "2026-08-13T14:26:07"
+        }
+      ],
+      "last_seen": "2026-08-14T15:18:24"
+    },
+    "value must be a valid phone number": {
+      "signature": "value must be a valid phone number",
+      "seen": 6,
+      "corrections": [],
+      "last_seen": "2026-08-18T16:00:03",
+      "withheld": 6
+    },
+    "value must be one of: now, scheduled, daily": {
+      "signature": "value must be one of: now, scheduled, daily",
+      "seen": 3,
+      "corrections": [
+        {
+          "accepted": "DAILY",
+          "rejected": "SOON",
+          "step": "Notification Schedule",
+          "count": 1,
+          "first_seen": "2026-08-13T14:33:25"
+        },
+        {
+          "accepted": "now",
+          "rejected": "SOON",
+          "step": "Notification Schedule",
+          "count": 1,
+          "first_seen": "2026-08-14T15:29:50"
+        },
+        {
+          "accepted": "scheduled",
+          "rejected": "soon",
+          "step": "Notification Schedule",
+          "count": 1,
+          "first_seen": "2026-08-18T10:45:41"
+        }
+      ],
+      "last_seen": "2026-08-18T10:45:41"
+    },
+    "value must be one of: pending, sent, failed": {
+      "signature": "value must be one of: pending, sent, failed",
+      "seen": 3,
+      "corrections": [
+        {
+          "accepted": "FAILED",
+          "rejected": "INact",
+          "step": "Notification Status",
+          "count": 1,
+          "first_seen": "2026-08-13T14:33:44"
+        },
+        {
+          "accepted": "PENDING",
+          "rejected": "SEND",
+          "step": "Notification Status",
+          "count": 1,
+          "first_seen": "2026-08-14T15:30:29"
+        },
+        {
+          "accepted": "failed",
+          "rejected": "keep",
+          "step": "Notification Status",
+          "count": 1,
+          "first_seen": "2026-08-18T10:45:52"
+        }
+      ],
+      "last_seen": "2026-08-18T10:45:52"
+    },
+    "value must be 'X' followed by exactly N digits": {
+      "signature": "value must be 'X' followed by exactly N digits",
+      "seen": 5,
+      "corrections": [
+        {
+          "accepted": "TRF432",
+          "rejected": "TRF21",
+          "step": "Unique Tariff Code",
+          "count": 1,
+          "first_seen": "2026-08-13T14:35:04"
+        },
+        {
+          "accepted": "INV-2431",
+          "rejected": "INV-",
+          "step": "Unique Invoice Number",
+          "count": 1,
+          "first_seen": "2026-08-13T15:25:56"
+        },
+        {
+          "accepted": "NOT345",
+          "rejected": "NOTswq",
+          "step": "Unique Notification ID",
+          "count": 1,
+          "first_seen": "2026-08-18T10:41:46"
+        },
+        {
+          "accepted": "BR6765",
+          "rejected": "BR65",
+          "step": "Unique Rule ID",
+          "count": 1,
+          "first_seen": "2026-08-18T15:23:28"
+        }
+      ],
+      "last_seen": "2026-08-18T15:23:28",
+      "withheld": 1
+    },
+    "value must contain at least N characters": {
+      "signature": "value must contain at least N characters",
+      "seen": 4,
+      "corrections": [
+        {
+          "accepted": "your delivery will be there very soon be patient",
+          "rejected": "wero",
+          "step": "Notification Message Content",
+          "count": 1,
+          "first_seen": "2026-08-18T10:45:03"
+        }
+      ],
+      "last_seen": "2026-08-18T15:14:45",
+      "withheld": 3
+    },
+    "value must be one of: usd, eur, gbp, jpy": {
+      "signature": "value must be one of: usd, eur, gbp, jpy",
+      "seen": 2,
+      "corrections": [
+        {
+          "accepted": "GBP",
+          "rejected": "XAF",
+          "step": "Allowed Currency",
+          "count": 1,
+          "first_seen": "2026-08-13T14:36:04"
+        },
+        {
+          "accepted": "JPY",
+          "rejected": "XAF",
+          "step": "Allowed Currency",
+          "count": 1,
+          "first_seen": "2026-08-18T10:00:50"
+        }
+      ],
+      "last_seen": "2026-08-18T10:00:50"
+    },
+    "value must have exactly N decimal places (you entered N)": {
+      "signature": "value must have exactly N decimal places (you entered N)",
+      "seen": 2,
+      "corrections": [
+        {
+          "accepted": "43.62",
+          "rejected": "32.0",
+          "step": "Positive Unit Rate",
+          "count": 1,
+          "first_seen": "2026-08-13T14:36:52"
+        },
+        {
+          "accepted": "0.43",
+          "rejected": "0.4",
+          "step": "Valid Tax Rate",
+          "count": 1,
+          "first_seen": "2026-08-13T14:37:22"
+        }
+      ],
+      "last_seen": "2026-08-13T14:37:22"
+    },
+    "value must be a date in yyyy-mm-dd format": {
+      "signature": "value must be a date in yyyy-mm-dd format",
+      "seen": 2,
+      "corrections": [
+        {
+          "accepted": "2026-09-1",
+          "rejected": "2026-2",
+          "step": "Future Start Date",
+          "count": 1,
+          "first_seen": "2026-08-13T14:38:10"
+        },
+        {
+          "accepted": "2026-11-2",
+          "rejected": "205-09-7",
+          "step": "Valid End Date",
+          "count": 1,
+          "first_seen": "2026-08-13T14:38:52"
+        }
+      ],
+      "last_seen": "2026-08-13T14:38:52"
+    },
+    "value must be a valid email address": {
+      "signature": "value must be a valid email address",
+      "seen": 5,
+      "corrections": [],
+      "last_seen": "2026-08-18T15:59:02",
+      "withheld": 5
+    },
+    "row N, unit price: value must have exactly N decimal places (you entered N)": {
+      "signature": "row N, unit price: value must have exactly N decimal places (you entered N)",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "2,ID-2341,ID-1002,bread,3,7.00",
+          "rejected": "2,id-21,it-10,bread,02,76",
+          "step": "Sales Order Items",
+          "count": 1,
+          "first_seen": "2026-08-13T15:08:51"
+        }
+      ],
+      "last_seen": "2026-08-13T15:08:51"
+    },
+    "full name may contain letters, spaces, apostrophes, and hyphens only": {
+      "signature": "full name may contain letters, spaces, apostrophes, and hyphens only",
+      "seen": 1,
+      "corrections": [],
+      "last_seen": "2026-08-13T15:34:51",
+      "withheld": 1
+    },
+    "this needs to be written out in full — at least N words. you entered N": {
+      "signature": "this needs to be written out in full — at least N words. you entered N",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "give me an example need help",
+          "rejected": "2",
+          "step": "Select Operation Type",
+          "count": 1,
+          "first_seen": "2026-08-13T15:37:27"
+        }
+      ],
+      "last_seen": "2026-08-13T15:37:27"
+    },
+    "full name must contain at least a first name and a last name": {
+      "signature": "full name must contain at least a first name and a last name",
+      "seen": 2,
+      "corrections": [],
+      "last_seen": "2026-08-18T09:36:16",
+      "withheld": 2
+    },
+    "value must be one of: admin, manager, supervisor, user": {
+      "signature": "value must be one of: admin, manager, supervisor, user",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "supervisor",
+          "rejected": "student",
+          "step": "Valid Role",
+          "count": 1,
+          "first_seen": "2026-08-13T16:38:58"
+        }
+      ],
+      "last_seen": "2026-08-13T16:38:58"
+    },
+    "value must be a whole number": {
+      "signature": "value must be a whole number",
+      "seen": 3,
+      "corrections": [
+        {
+          "accepted": "4",
+          "rejected": "3.9",
+          "step": "Product ID",
+          "count": 1,
+          "first_seen": "2026-08-14T15:32:11"
+        }
+      ],
+      "last_seen": "2026-08-18T10:49:16",
+      "withheld": 2
+    },
+    "value must be a valid date": {
+      "signature": "value must be a valid date",
+      "seen": 4,
+      "corrections": [
+        {
+          "accepted": "2026-9-7",
+          "rejected": "87uh",
+          "step": "Order Date",
+          "count": 1,
+          "first_seen": "2026-08-14T13:45:30"
+        },
+        {
+          "accepted": "2026-09-2",
+          "rejected": "2026",
+          "step": "Order Date",
+          "count": 1,
+          "first_seen": "2026-08-18T10:50:18"
+        },
+        {
+          "accepted": "2026-08-3",
+          "rejected": "34",
+          "step": "Timeline",
+          "count": 1,
+          "first_seen": "2026-08-18T12:51:11"
+        },
+        {
+          "accepted": "2026-09-4",
+          "rejected": "2304-31-le",
+          "step": "Order Date",
+          "count": 1,
+          "first_seen": "2026-08-18T16:02:03"
+        }
+      ],
+      "last_seen": "2026-08-18T16:02:03"
+    },
+    "value appears to be invalid. please provide a meaningful value": {
+      "signature": "value appears to be invalid. please provide a meaningful value",
+      "seen": 2,
+      "corrections": [
+        {
+          "accepted": "EXPRESS",
+          "rejected": "1q",
+          "step": "Shipping Method",
+          "count": 1,
+          "first_seen": "2026-08-14T13:46:41"
+        },
+        {
+          "accepted": ".4",
+          "rejected": "m09.21",
+          "step": "Tax Amount",
+          "count": 1,
+          "first_seen": "2026-08-18T10:53:30"
+        }
+      ],
+      "last_seen": "2026-08-18T10:53:30"
+    },
+    "value must be one of: pending, completed, failed": {
+      "signature": "value must be one of: pending, completed, failed",
+      "seen": 2,
+      "corrections": [
+        {
+          "accepted": "PENDING",
+          "rejected": "SUCESS",
+          "step": "Payment Status",
+          "count": 1,
+          "first_seen": "2026-08-14T13:47:01"
+        },
+        {
+          "accepted": "failed",
+          "rejected": "else",
+          "step": "Payment Status",
+          "count": 1,
+          "first_seen": "2026-08-18T10:52:41"
+        }
+      ],
+      "last_seen": "2026-08-18T10:52:41"
+    },
+    "value must be one of: pending, processing, shipped, delivered, cancelled": {
+      "signature": "value must be one of: pending, processing, shipped, delivered, cancelled",
+      "seen": 2,
+      "corrections": [
+        {
+          "accepted": "DELIVERED",
+          "rejected": "OUT",
+          "step": "Order Status",
+          "count": 1,
+          "first_seen": "2026-08-14T13:47:30"
+        },
+        {
+          "accepted": "delivered",
+          "rejected": "notship",
+          "step": "Order Status",
+          "count": 1,
+          "first_seen": "2026-08-18T10:52:57"
+        }
+      ],
+      "last_seen": "2026-08-18T10:52:57"
+    },
+    "value must be one of: email, sms, push, slack, teams": {
+      "signature": "value must be one of: email, sms, push, slack, teams",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "SMS",
+          "rejected": "noise",
+          "step": "Valid Notification Type",
+          "count": 1,
+          "first_seen": "2026-08-14T15:27:13"
+        }
+      ],
+      "last_seen": "2026-08-14T15:27:13"
+    },
+    "value must be one of: low, medium, high": {
+      "signature": "value must be one of: low, medium, high",
+      "seen": 2,
+      "corrections": [
+        {
+          "accepted": "HIGH",
+          "rejected": "tech",
+          "step": "Notification Priority",
+          "count": 1,
+          "first_seen": "2026-08-14T15:29:29"
+        },
+        {
+          "accepted": "high",
+          "rejected": "nothing",
+          "step": "Notification Priority",
+          "count": 1,
+          "first_seen": "2026-08-18T10:45:17"
+        }
+      ],
+      "last_seen": "2026-08-18T10:45:17"
+    },
+    "value must be one of: active, inactive, suspended": {
+      "signature": "value must be one of: active, inactive, suspended",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "active",
+          "rejected": "pending",
+          "step": "Valid Status",
+          "count": 1,
+          "first_seen": "2026-08-18T09:37:32"
+        }
+      ],
+      "last_seen": "2026-08-18T09:37:32"
+    },
+    "value must contain letters, matching the expected format": {
+      "signature": "value must contain letters, matching the expected format",
+      "seen": 4,
+      "corrections": [
+        {
+          "accepted": "po",
+          "rejected": "1`",
+          "step": "Purchase Order Number",
+          "count": 1,
+          "first_seen": "2026-08-18T10:54:15"
+        }
+      ],
+      "last_seen": "2026-08-18T15:58:45",
+      "withheld": 3
+    },
+    "value must be a valid number": {
+      "signature": "value must be a valid number",
+      "seen": 4,
+      "corrections": [
+        {
+          "accepted": "3.21",
+          "rejected": "DE21",
+          "step": "Positive Unit Rate",
+          "count": 1,
+          "first_seen": "2026-08-18T10:01:15"
+        },
+        {
+          "accepted": "4",
+          "rejected": "/e63",
+          "step": "Total Amount",
+          "count": 1,
+          "first_seen": "2026-08-18T10:53:19"
+        },
+        {
+          "accepted": "456897",
+          "rejected": "ewewerd",
+          "step": "requested_amount",
+          "count": 1,
+          "first_seen": "2026-08-18T16:25:55"
+        },
+        {
+          "accepted": "3985",
+          "rejected": "qweae",
+          "step": "annual_profit",
+          "count": 1,
+          "first_seen": "2026-08-18T16:26:31"
+        }
+      ],
+      "last_seen": "2026-08-18T16:26:31"
+    },
+    "value must be one of: standard, express, overnight": {
+      "signature": "value must be one of: standard, express, overnight",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "STANDARD",
+          "rejected": "nb",
+          "step": "Shipping Method",
+          "count": 1,
+          "first_seen": "2026-08-18T10:51:40"
+        }
+      ],
+      "last_seen": "2026-08-18T10:51:40"
+    },
+    "item N: value cannot be a generic placeholder": {
+      "signature": "item N: value cannot be a generic placeholder",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "we are going to attribute an invoice code in order to solve the problem",
+          "rejected": "example",
+          "step": "Solution Offered",
+          "count": 1,
+          "first_seen": "2026-08-18T12:49:56"
+        }
+      ],
+      "last_seen": "2026-08-18T12:49:56"
+    },
+    "value must be at least N": {
+      "signature": "value must be at least N",
+      "seen": 2,
+      "corrections": [
+        {
+          "accepted": "98665",
+          "rejected": "-0987",
+          "step": "existing_debt",
+          "count": 1,
+          "first_seen": "2026-08-18T16:26:44"
+        },
+        {
+          "accepted": "20",
+          "rejected": "0",
+          "step": "business_age",
+          "count": 1,
+          "first_seen": "2026-08-18T16:26:57"
+        }
+      ],
+      "last_seen": "2026-08-18T16:26:57"
+    },
+    "value must be no more than N": {
+      "signature": "value must be no more than N",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "321",
+          "rejected": "87657",
+          "step": "credit_score",
+          "count": 1,
+          "first_seen": "2026-08-18T16:27:15"
+        }
+      ],
+      "last_seen": "2026-08-18T16:27:15"
+    }
+  }
+}

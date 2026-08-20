@@ -1,0 +1,24 @@
+:root {
+  font-family: 'Inter', 'Roboto', sans-serif;
+  color: #0f172a;
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #eaf3ff;
+}
