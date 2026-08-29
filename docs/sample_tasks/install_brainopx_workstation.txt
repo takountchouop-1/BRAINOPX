@@ -1,0 +1,31 @@
+BRAINOPX Workstation Installation Procedure
+
+This document defines the steps a technician follows to install BRAINOPX
+on a new workstation.
+
+1. Confirm the workstation meets requirements.
+   Ask the technician to confirm the workstation has at least 8GB of RAM
+   and 20GB of free disk space by typing "confirmed" or "yes".
+
+2. License Key.
+   Enter the BRAINOPX license key. The format is BOPX followed by 8 digits,
+   for example BOPX12345678.
+
+3. Installation Directory.
+   Enter the full installation directory path, for example
+   C:\Program Files\BRAINOPX.
+
+4. Administrator Notification Email.
+   Enter the administrator's email address that will receive the setup
+   confirmation. This should preferably be a company email address rather
+   than a personal address such as gmail.com, yahoo.com or hotmail.com —
+   a personal address is allowed but discouraged since setup notifications
+   should stay within the company domain.
+
+5. Setup Notes.
+   Write a short note describing what was done during setup. The note
+   must address the license activation, the admin account that was
+   created, and the network configuration that was applied.
+
+6. Confirm installation completed.
+   Confirm the installer finished without errors by typing "yes" or "no".

@@ -1,0 +1,24 @@
+Explaining a BRAINOPX Cross-Analysis Report
+
+This document guides an expert through explaining a Cross-Analysis report
+to a colleague who has never read one before.
+
+1. What the report shows.
+   Explain in your own words what a Cross-Analysis report shows. Your
+   explanation must address the trend across periods, the variance
+   between expected and actual values, and how an anomaly is flagged.
+
+2. Reading the risk indicator.
+   Explain which column or metric in the report indicates a risk, and
+   how a reader should recognise it.
+
+3. Escalation threshold.
+   Enter the variance percentage above which an anomaly should be
+   escalated to a manager. This is normally a number between 0 and 100.
+   A threshold below 5 should be used with caution — escalating on very
+   small variances usually produces too many false alarms, though it is
+   allowed if the reviewer wants extra sensitivity.
+
+4. Investigating an anomaly.
+   Describe, step by step, how you would investigate an anomaly flagged
+   in the report before deciding whether to escalate it.
