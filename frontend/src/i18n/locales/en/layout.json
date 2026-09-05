@@ -1,0 +1,161 @@
+{
+  "language": {
+    "english": "English",
+    "french": "French",
+    "label": "Language",
+    "switchTo": "Switch to {{language}}"
+  },
+  "sidebar": {
+    "menu": {
+      "dashboard": "Dashboard",
+      "request": "Request",
+      "taskManagement": "Task Management",
+      "generalAssistant": "General Assistant",
+      "userManagement": "User Management",
+      "ruleEngine": "Rule Engine",
+      "profile": "Profile"
+    },
+    "brand": {
+      "short": "BX",
+      "full": "BRAINOPX"
+    },
+    "logout": "Logout",
+    "logoutButton": "Logout"
+  },
+  "dashboardHome": {
+    "status": {
+      "draft": "Not started",
+      "fileSubmitted": "Pending",
+      "analysisInProgress": "In progress",
+      "waitingForSupportResponse": "Awaiting response",
+      "additionalInformationRequired": "Needs information",
+      "dataCorrected": "Corrected",
+      "dataValidated": "Validated",
+      "scriptGenerated": "Script generated",
+      "processingCompleted": "Completed",
+      "escalationRequired": "Escalated",
+      "unknown": "Unknown"
+    },
+    "priority": {
+      "high": "High",
+      "medium": "Medium",
+      "low": "Low"
+    },
+    "errors": {
+      "sessionExpired": "Your session has expired. Please sign in again.",
+      "couldNotLoadTasksWithStatus": "Could not load tasks ({{status}}).",
+      "couldNotLoadTasks": "Could not load tasks.",
+      "onlyChangeOwnRequests": "You can only change your own requests.",
+      "couldNotChangePriorityWithStatus": "Could not change the priority ({{status}}).",
+      "couldNotChangePriority": "Could not change the priority.",
+      "couldNotCompleteTaskWithStatus": "Could not mark this task complete ({{status}}).",
+      "couldNotCompleteTask": "Could not mark this task complete.",
+      "onlyDeleteOwnRequests": "You can only delete your own requests.",
+      "couldNotDeleteTaskWithStatus": "Could not delete this task ({{status}}).",
+      "couldNotDeleteTasksWithStatus": "Could not delete the selected tasks ({{status}}).",
+      "couldNotDelete": "Could not delete."
+    },
+    "notices": {
+      "taskCompleted": "Task marked as completed.",
+      "taskDeleted": "Task deleted.",
+      "partialDelete_one": "{{count}} deleted. {{refused}} could not be — you can only delete your own requests.",
+      "partialDelete_other": "{{count}} deleted. {{refused}} could not be — you can only delete your own requests.",
+      "bulkDeleted_one": "{{count}} task deleted.",
+      "bulkDeleted_other": "{{count}} tasks deleted."
+    },
+    "title": "Dashboard",
+    "subtitle": "An overview of every configuration request and how it's progressing.",
+    "user": "User",
+    "refresh": "Refresh",
+    "tabs": {
+      "overview": "Overview",
+      "graphAnalysis": "Graph Analysis"
+    },
+    "welcome": "Welcome",
+    "administrator": "Administrator",
+    "member": "Member",
+    "stats": {
+      "totalTasks": "Total Tasks",
+      "createdThisMonth": "{{count}} created this month",
+      "inProgress": "In Progress",
+      "currentlyBeingWorkedOn": "Currently being worked on",
+      "completed": "Completed",
+      "finishedThisWeek": "{{count}} finished this week",
+      "notStarted": "Not Started",
+      "waitingToBePickedUp": "Waiting to be picked up"
+    },
+    "selection": {
+      "selectedCount": "{{count}} selected",
+      "clear": "Clear",
+      "deleteSelected": "Delete selected"
+    },
+    "table": {
+      "selectAllAria": "Select all tasks on this page",
+      "taskName": "Task Name",
+      "assignee": "Assignee",
+      "priority": "Priority",
+      "status": "Status",
+      "updated": "Updated",
+      "noTasksYet": "No tasks yet",
+      "noTasksMatch": "No tasks match your search term \"{{term}}\"",
+      "selectRowAria": "Select {{name}}",
+      "noFileUploaded": "No file uploaded",
+      "unassigned": "Unassigned",
+      "clickToChangePriority": "Click to change priority",
+      "recordsLabel": "tasks"
+    },
+    "rowMenu": {
+      "finishAllStepsFirst": "Finish all steps first",
+      "markAsCompleted": "Mark as completed",
+      "delete": "Delete"
+    },
+    "deleteDialog": {
+      "titlePlural": "Delete {{count}} tasks?",
+      "titleSingle": "Delete this task?",
+      "willBeRemoved": "will be removed.",
+      "consequencePlural": "This cannot be undone.",
+      "consequenceSingular": "This cannot be undone.",
+      "cancel": "Cancel",
+      "deleting": "Deleting...",
+      "deleteCount": "Delete {{count}}",
+      "delete": "Delete"
+    }
+  },
+  "graphAnalysis": {
+    "category": {
+      "reportAnalyses": "Report Analyses",
+      "skillEngine": "Skill Engine",
+      "other": "Other"
+    },
+    "emptyState": "No tasks yet — charts will appear once requests start coming in.",
+    "stats": {
+      "overallCompletion": "Overall Completion",
+      "averageAcrossEveryRequest": "Average across every request",
+      "reportAnalyses": "Report Analyses",
+      "percentCompleted": "{{percent}}% completed",
+      "skillEngine": "Skill Engine",
+      "ruleBasedRequests": "Rule-based requests",
+      "highPriorityOpen": "High Priority Open",
+      "notYetCompleted": "Not yet completed"
+    },
+    "charts": {
+      "byTaskCategory": "By Task Category",
+      "notStartedVsInProgressVsCompleted": "Not started vs. in progress vs. completed",
+      "priorityMix": "Priority Mix",
+      "everyRequestByUrgency": "Every request, by urgency",
+      "statusDistribution": "Status Distribution",
+      "whereEveryRequestSits": "Where every request sits right now"
+    },
+    "bucket": {
+      "notStarted": "Not started",
+      "inProgress": "In progress",
+      "completed": "Completed"
+    },
+    "tracking": {
+      "title": "Report Analyses Tracking",
+      "subtitle": "Completion rate for the Excel-template category",
+      "mostRecentlyUpdated": "Most recently updated",
+      "noReportAnalysesYet": "No Report Analyses requests yet."
+    }
+  }
+}

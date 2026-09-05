@@ -1,0 +1,161 @@
+{
+  "language": {
+    "english": "Anglais",
+    "french": "Français",
+    "label": "Langue",
+    "switchTo": "Passer en {{language}}"
+  },
+  "sidebar": {
+    "menu": {
+      "dashboard": "Tableau de bord",
+      "request": "Demande",
+      "taskManagement": "Gestion des tâches",
+      "generalAssistant": "Assistant général",
+      "userManagement": "Gestion des utilisateurs",
+      "ruleEngine": "Moteur de règles",
+      "profile": "Profil"
+    },
+    "brand": {
+      "short": "BX",
+      "full": "BRAINOPX"
+    },
+    "logout": "Déconnexion",
+    "logoutButton": "Déconnexion"
+  },
+  "dashboardHome": {
+    "status": {
+      "draft": "Non commencé",
+      "fileSubmitted": "En attente",
+      "analysisInProgress": "En cours",
+      "waitingForSupportResponse": "En attente de réponse",
+      "additionalInformationRequired": "Informations requises",
+      "dataCorrected": "Corrigé",
+      "dataValidated": "Validé",
+      "scriptGenerated": "Script généré",
+      "processingCompleted": "Terminé",
+      "escalationRequired": "Escaladé",
+      "unknown": "Inconnu"
+    },
+    "priority": {
+      "high": "Haute",
+      "medium": "Moyenne",
+      "low": "Basse"
+    },
+    "errors": {
+      "sessionExpired": "Votre session a expiré. Veuillez vous reconnecter.",
+      "couldNotLoadTasksWithStatus": "Impossible de charger les tâches ({{status}}).",
+      "couldNotLoadTasks": "Impossible de charger les tâches.",
+      "onlyChangeOwnRequests": "Vous ne pouvez modifier que vos propres demandes.",
+      "couldNotChangePriorityWithStatus": "Impossible de modifier la priorité ({{status}}).",
+      "couldNotChangePriority": "Impossible de modifier la priorité.",
+      "couldNotCompleteTaskWithStatus": "Impossible de marquer cette tâche comme terminée ({{status}}).",
+      "couldNotCompleteTask": "Impossible de marquer cette tâche comme terminée.",
+      "onlyDeleteOwnRequests": "Vous ne pouvez supprimer que vos propres demandes.",
+      "couldNotDeleteTaskWithStatus": "Impossible de supprimer cette tâche ({{status}}).",
+      "couldNotDeleteTasksWithStatus": "Impossible de supprimer les tâches sélectionnées ({{status}}).",
+      "couldNotDelete": "Suppression impossible."
+    },
+    "notices": {
+      "taskCompleted": "Tâche marquée comme terminée.",
+      "taskDeleted": "Tâche supprimée.",
+      "partialDelete_one": "{{count}} supprimée(s). {{refused}} n'ont pas pu l'être — vous ne pouvez supprimer que vos propres demandes.",
+      "partialDelete_other": "{{count}} supprimée(s). {{refused}} n'ont pas pu l'être — vous ne pouvez supprimer que vos propres demandes.",
+      "bulkDeleted_one": "{{count}} tâche supprimée.",
+      "bulkDeleted_other": "{{count}} tâches supprimées."
+    },
+    "title": "Tableau de bord",
+    "subtitle": "Une vue d'ensemble de chaque demande de configuration et de son avancement.",
+    "user": "Utilisateur",
+    "refresh": "Actualiser",
+    "tabs": {
+      "overview": "Vue d'ensemble",
+      "graphAnalysis": "Analyse graphique"
+    },
+    "welcome": "Bienvenue",
+    "administrator": "Administrateur",
+    "member": "Membre",
+    "stats": {
+      "totalTasks": "Total des tâches",
+      "createdThisMonth": "{{count}} créée(s) ce mois-ci",
+      "inProgress": "En cours",
+      "currentlyBeingWorkedOn": "Actuellement en cours de traitement",
+      "completed": "Terminées",
+      "finishedThisWeek": "{{count}} terminée(s) cette semaine",
+      "notStarted": "Non commencées",
+      "waitingToBePickedUp": "En attente de prise en charge"
+    },
+    "selection": {
+      "selectedCount": "{{count}} sélectionné(s)",
+      "clear": "Effacer",
+      "deleteSelected": "Supprimer la sélection"
+    },
+    "table": {
+      "selectAllAria": "Sélectionner toutes les tâches de cette page",
+      "taskName": "Nom de la tâche",
+      "assignee": "Assigné à",
+      "priority": "Priorité",
+      "status": "Statut",
+      "updated": "Mise à jour",
+      "noTasksYet": "Aucune tâche pour le moment",
+      "noTasksMatch": "Aucune tâche ne correspond à votre recherche « {{term}} »",
+      "selectRowAria": "Sélectionner {{name}}",
+      "noFileUploaded": "Aucun fichier importé",
+      "unassigned": "Non assigné",
+      "clickToChangePriority": "Cliquer pour changer la priorité",
+      "recordsLabel": "tâches"
+    },
+    "rowMenu": {
+      "finishAllStepsFirst": "Terminez d'abord toutes les étapes",
+      "markAsCompleted": "Marquer comme terminé",
+      "delete": "Supprimer"
+    },
+    "deleteDialog": {
+      "titlePlural": "Supprimer {{count}} tâches ?",
+      "titleSingle": "Supprimer cette tâche ?",
+      "willBeRemoved": "sera supprimé.",
+      "consequencePlural": "Cette action est irréversible.",
+      "consequenceSingular": "Cette action est irréversible.",
+      "cancel": "Annuler",
+      "deleting": "Suppression...",
+      "deleteCount": "Supprimer {{count}}",
+      "delete": "Supprimer"
+    }
+  },
+  "graphAnalysis": {
+    "category": {
+      "reportAnalyses": "Analyses de rapports",
+      "skillEngine": "Moteur de règles",
+      "other": "Autre"
+    },
+    "emptyState": "Aucune tâche pour le moment — les graphiques apparaîtront dès que des demandes arriveront.",
+    "stats": {
+      "overallCompletion": "Achèvement global",
+      "averageAcrossEveryRequest": "Moyenne sur l'ensemble des demandes",
+      "reportAnalyses": "Analyses de rapports",
+      "percentCompleted": "{{percent}} % terminé",
+      "skillEngine": "Moteur de règles",
+      "ruleBasedRequests": "Demandes basées sur des règles",
+      "highPriorityOpen": "Priorité haute en cours",
+      "notYetCompleted": "Pas encore terminées"
+    },
+    "charts": {
+      "byTaskCategory": "Par catégorie de tâche",
+      "notStartedVsInProgressVsCompleted": "Non commencé vs en cours vs terminé",
+      "priorityMix": "Répartition des priorités",
+      "everyRequestByUrgency": "Toutes les demandes, par urgence",
+      "statusDistribution": "Répartition des statuts",
+      "whereEveryRequestSits": "Où se situe chaque demande en ce moment"
+    },
+    "bucket": {
+      "notStarted": "Non commencé",
+      "inProgress": "En cours",
+      "completed": "Terminé"
+    },
+    "tracking": {
+      "title": "Suivi des analyses de rapports",
+      "subtitle": "Taux d'achèvement pour la catégorie modèle Excel",
+      "mostRecentlyUpdated": "Mises à jour les plus récentes",
+      "noReportAnalysesYet": "Aucune demande d'Analyse de rapport pour le moment."
+    }
+  }
+}
