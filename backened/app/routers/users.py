@@ -59,14 +59,12 @@ def _generate_temporary_password() -> str:
 @router.get("/")
 def list_users(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin_user),
 ):
     """
-    Every user, for the User Management page.
-
-    Open to anyone signed in — viewing the team roster is not
-    sensitive. Creating a user (create_user) and changing anyone's
-    role, access or active status (update_user_access) stay admin-only.
+    Every user, for the User Management page. Admin only — the
+    response includes each user's email, address and last login, so
+    it's restricted the same as creating/editing/deleting users.
     """
 
     users = db.query(User).order_by(User.created_at.desc()).all()
@@ -283,7 +281,7 @@ def update_profile(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Update the current user's profile (full_name and/or email).
+    Update the current user's profile (full_name, email, and/or language).
     """
     # Validate and update email
     if update_data.email is not None:
@@ -302,6 +300,15 @@ def update_profile(
     # Validate and update full_name
     if update_data.full_name is not None:
         current_user.full_name = update_data.full_name
+
+    # Validate and update language
+    if update_data.language is not None:
+        if update_data.language not in ("en", "fr"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Language must be 'en' or 'fr'.",
+            )
+        current_user.language = update_data.language
 
     db.commit()
     db.refresh(current_user)

@@ -26,7 +26,11 @@ from ..schemas.assistant import (
     AssistantMessageOut,
 )
 from ..services.document_service import build_docx, build_pdf
-from ..services.groq_service import get_assistant_chat_response
+from ..services.groq_service import (
+    get_assistant_chat_response,
+    get_assistant_followup_suggestions,
+    is_document_related_to_brainopx,
+)
 from ..services.rule_parser import extract_text
 
 logger = logging.getLogger(__name__)
@@ -110,6 +114,32 @@ def _attachment_out(attachment: AssistantAttachment) -> AssistantAttachmentOut:
         size_bytes=attachment.size_bytes,
         url=_attachment_url(attachment.stored_path),
         extractable=attachment.extractable,
+    )
+
+
+def _off_topic_attachment_message(language: str, filenames: list[str]) -> str:
+    """
+    Canned reply used instead of calling the AI when one or more attached
+    documents aren't related to BRAINOPX — the assistant should refuse to
+    read/summarize such a file rather than analyze whatever it contains.
+    """
+
+    names = ", ".join(f'"{name}"' for name in filenames)
+    plural = len(filenames) > 1
+
+    if language == "fr":
+        verb = "ne semblent pas être liés" if plural else "ne semble pas être lié"
+        return (
+            f"Je ne peux analyser que des documents liés à BRAINOPX (tâches, règles, "
+            f"données de configuration ou rapports). {names} {verb} à BRAINOPX. "
+            "Merci de téléverser un document lié à BRAINOPX."
+        )
+
+    verb = "don't" if plural else "doesn't"
+    return (
+        f"I can only analyze documents related to BRAINOPX (tasks, rules, "
+        f"configuration data, or reports). {names} {verb} appear to be related. "
+        "Please upload a document related to BRAINOPX."
     )
 
 
@@ -261,6 +291,16 @@ def chat(
                 detail=f"Already attached to another message: {', '.join(already_used)}",
             )
 
+    # Gate on relevance before the assistant reads/summarizes any attached
+    # file: an off-topic upload should be refused, not analyzed. Only
+    # extractable attachments are checked — an unreadable file already gets
+    # its own "couldn't be read" notice at upload time.
+    unrelated_attachments = [
+        a
+        for a in attachments
+        if a.extractable and not is_document_related_to_brainopx(a.original_filename, a.extracted_text)
+    ]
+
     extra_context = _build_attachment_context(attachments)
 
     history_rows = (
@@ -283,12 +323,27 @@ def chat(
         attachment.conversation_id = conversation.id
         attachment.message_id = user_message.id
 
-    reply_text = get_assistant_chat_response(
-        user_message=payload.message,
-        conversation_history=conversation_history,
-        task_context=task_context,
-        extra_context=extra_context,
-    )
+    if unrelated_attachments:
+        reply_text = _off_topic_attachment_message(
+            current_user.language,
+            [a.original_filename for a in unrelated_attachments],
+        )
+        suggestions: list[str] = []
+    else:
+        reply_text = get_assistant_chat_response(
+            user_message=payload.message,
+            conversation_history=conversation_history,
+            task_context=task_context,
+            extra_context=extra_context,
+            language=current_user.language,
+        )
+        # Follow-up chips for the composer once this turn completes — best
+        # effort, so a failure here never blocks the reply itself.
+        suggestions = get_assistant_followup_suggestions(
+            user_message=payload.message,
+            assistant_reply=reply_text,
+            language=current_user.language,
+        )
 
     reply_message = AssistantMessage(
         conversation_id=conversation.id,
@@ -311,6 +366,7 @@ def chat(
             content=reply_message.content,
             created_at=reply_message.created_at,
             attachments=[_attachment_out(a) for a in attachments],
+            suggestions=suggestions,
         ),
     )
 

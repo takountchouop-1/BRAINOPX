@@ -27,6 +27,9 @@ class AssistantMessageOut(BaseModel):
     content: str
     created_at: datetime
     attachments: list[AssistantAttachmentOut] = []
+    # Follow-up chips for a reply that was just generated. Not persisted —
+    # always empty when a message comes back from conversation history.
+    suggestions: list[str] = []
 
     class Config:
         from_attributes = True

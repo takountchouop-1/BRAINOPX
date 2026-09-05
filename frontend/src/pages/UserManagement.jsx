@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
+import { Trans, useTranslation } from 'react-i18next'
 import {
   Alert,
   Avatar,
@@ -64,27 +65,18 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 // Mirrors app.services.user_access on the backend — the only two
 // access tags that exist, plus the two roles.
 
-const ACCESS_OPTIONS = [
-  { value: 'data_export', label: 'Data Export' },
-  { value: 'data_import', label: 'Data Import' },
-]
-
-const ROLE_OPTIONS = [
-  { value: 'admin', label: 'Admin' },
-  { value: 'member', label: 'Member' },
-]
-
-// Chip colours. "Admin" gets the brand accent since it is the most
+// Chip colours, keyed by the stable backend value (not the translated
+// label). "Admin" gets the brand accent since it is the most
 // consequential tag; the two access tags get colours distinct from
 // both that and the status/priority palettes used elsewhere in the
 // dashboard, so a glance is enough to tell which kind of tag it is.
 const TAG_META = {
-  Admin: { color: '#4f46e5', bg: 'rgba(79,70,229,0.12)' },
-  'Data Export': { color: '#0d9488', bg: 'rgba(13,148,136,0.12)' },
-  'Data Import': { color: '#7c3aed', bg: 'rgba(124,58,237,0.12)' },
+  admin: { color: '#4f46e5', bg: 'rgba(79,70,229,0.12)' },
+  data_export: { color: '#0d9488', bg: 'rgba(13,148,136,0.12)' },
+  data_import: { color: '#7c3aed', bg: 'rgba(124,58,237,0.12)' },
 }
 
-const tagMeta = (label) => TAG_META[label] || { color: '#64748b', bg: 'rgba(100,116,139,0.12)' }
+const tagMeta = (key) => TAG_META[key] || { color: '#64748b', bg: 'rgba(100,116,139,0.12)' }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
@@ -104,21 +96,32 @@ const dateOf = (value) => {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-const displayTags = (user) => {
-  const tags = []
-  if (user.role === 'admin') tags.push('Admin')
-  for (const opt of ACCESS_OPTIONS) {
-    if ((user.access || []).includes(opt.value)) tags.push(opt.label)
-  }
-  return tags
-}
-
 const emptyForm = { full_name: '', email: '', address: '', role: 'member', access: [] }
 
 // ─── PAGE ────────────────────────────────────────────────────────────────────
 
 const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
+  const { t } = useTranslation('pages')
   const { user: me } = useAuth()
+
+  const ACCESS_OPTIONS = [
+    { value: 'data_export', label: t('userManagement.accessDataExport') },
+    { value: 'data_import', label: t('userManagement.accessDataImport') },
+  ]
+
+  const ROLE_OPTIONS = [
+    { value: 'admin', label: t('userManagement.roleAdmin') },
+    { value: 'member', label: t('userManagement.roleMember') },
+  ]
+
+  const displayTags = (targetUser) => {
+    const tags = []
+    if (targetUser.role === 'admin') tags.push({ key: 'admin', label: t('userManagement.roleAdmin') })
+    for (const opt of ACCESS_OPTIONS) {
+      if ((targetUser.access || []).includes(opt.value)) tags.push({ key: opt.value, label: opt.label })
+    }
+    return tags
+  }
   // Same dashboard for everyone; viewing the roster is open to all,
   // but adding a user and changing anyone's role/access/status are
   // admin-only — enforced on the backend regardless of this flag.
@@ -148,8 +151,8 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
         throw new Error(
           body.detail ||
             (resp.status === 403
-              ? 'User management is available to administrators only.'
-              : `Could not load users (${resp.status}).`)
+              ? t('userManagement.errorAdminOnly')
+              : t('userManagement.errorLoadUsersStatus', { status: resp.status }))
         )
       }
 
@@ -157,11 +160,11 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
       setSummary(data.summary || null)
       setItems(data.items || [])
     } catch (err) {
-      setError(err.message || 'Could not load users.')
+      setError(err.message || t('userManagement.errorLoadUsersDefault'))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     load()
@@ -230,7 +233,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
     })
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}))
-      throw new Error(err.detail || `Could not update this user (${resp.status}).`)
+      throw new Error(err.detail || t('userManagement.errorUpdateUserStatus', { status: resp.status }))
     }
     return resp.json()
   }
@@ -240,7 +243,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
   const setActive = async (targetUser, active) => {
     try {
       await patchUser(targetUser.id, { is_active: active })
-      setNotice({ severity: 'success', text: active ? 'Account reactivated.' : 'Account deactivated.' })
+      setNotice({ severity: 'success', text: active ? t('userManagement.accountReactivated') : t('userManagement.accountDeactivated') })
       await load()
     } catch (err) {
       setNotice({ severity: 'error', text: err.message })
@@ -281,12 +284,12 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
         throw new Error(
           body.detail ||
             (resp.status === 403
-              ? 'Only administrators can delete users.'
-              : `Could not delete this user (${resp.status}).`)
+              ? t('userManagement.errorDeleteAdminOnly')
+              : t('userManagement.errorDeleteUserStatus', { status: resp.status }))
         )
       }
 
-      setNotice({ severity: 'success', text: 'User deleted.' })
+      setNotice({ severity: 'success', text: t('userManagement.userDeleted') })
       setConfirmDelete(null)
       await load()
     } catch (err) {
@@ -294,7 +297,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
       // explanation here (usually "this account has real history
       // attached") is something the admin needs to actually read,
       // not something that should vanish in four seconds.
-      setDeleteError(err.message || 'Could not delete this user.')
+      setDeleteError(err.message || t('userManagement.errorDeleteUserDefault'))
     } finally {
       setDeletingUser(false)
     }
@@ -348,7 +351,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
 
     if (formMode === 'create') {
       if (!form.full_name.trim() || !form.email.trim()) {
-        setFormError('Name and email are required.')
+        setFormError(t('userManagement.errorNameEmailRequired'))
         return
       }
     }
@@ -372,7 +375,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
 
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}))
-          throw new Error(err.detail || `Could not create this user (${resp.status}).`)
+          throw new Error(err.detail || t('userManagement.errorCreateUserStatus', { status: resp.status }))
         }
 
         const data = await resp.json()
@@ -389,12 +392,12 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
           address: form.address.trim() || null,
         })
         setFormOpen(false)
-        setNotice({ severity: 'success', text: 'User updated.' })
+        setNotice({ severity: 'success', text: t('userManagement.userUpdated') })
       }
 
       await load()
     } catch (err) {
-      setFormError(err.message || 'Something went wrong.')
+      setFormError(err.message || t('userManagement.errorGeneric'))
     } finally {
       setSaving(false)
     }
@@ -404,7 +407,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
     if (!credentials) return
     try {
       await navigator.clipboard.writeText(credentials.password)
-      setNotice({ severity: 'success', text: 'Password copied.' })
+      setNotice({ severity: 'success', text: t('userManagement.passwordCopied') })
     } catch {
       // Clipboard access can be denied by the browser; the password
       // is still visible on screen to copy by hand.
@@ -418,10 +421,10 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
       <Box sx={{ maxWidth: 1400, mx: 'auto' }}>
 
         <Typography variant="h4" sx={{ fontWeight: 700, mb: 0.5, color: 'text.primary' }}>
-          User management
+          {t('userManagement.pageTitle')}
         </Typography>
         <Typography variant="body1" sx={{ color: 'text.secondary', mb: 3 }}>
-          Manage your team members and their account permissions here.
+          {t('userManagement.pageSubtitle')}
         </Typography>
 
         {error && (
@@ -437,13 +440,13 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
           sx={{ mb: 2 }}
         >
           <Typography variant="h6" sx={{ fontWeight: 700 }}>
-            All users <Typography component="span" sx={{ color: 'text.secondary', fontWeight: 600 }}>{total}</Typography>
+            {t('userManagement.allUsers')} <Typography component="span" sx={{ color: 'text.secondary', fontWeight: 600 }}>{total}</Typography>
           </Typography>
 
           <Stack direction="row" spacing={1.25}>
             <TextField
               size="small"
-              placeholder="Search"
+              placeholder={t('userManagement.searchPlaceholder')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               sx={{ minWidth: 220 }}
@@ -462,10 +465,10 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
               onClick={(e) => setFilterAnchor(e.currentTarget)}
               sx={{ textTransform: 'none', borderRadius: 2, whiteSpace: 'nowrap' }}
             >
-              {roleFilter ? `Filters (${roleFilter})` : 'Filters'}
+              {roleFilter ? t('userManagement.filtersWithRole', { role: roleFilter }) : t('userManagement.filters')}
             </Button>
 
-            <Tooltip title={isAdmin ? '' : 'Only administrators can add users'}>
+            <Tooltip title={isAdmin ? '' : t('userManagement.addUserTooltipDisabled')}>
               <span>
                 <Button
                   variant="contained"
@@ -474,7 +477,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
                   disabled={!isAdmin}
                   sx={{ textTransform: 'none', borderRadius: 2, bgcolor: '#4f46e5', '&:hover': { bgcolor: '#4338ca' }, whiteSpace: 'nowrap' }}
                 >
-                  Add user
+                  {t('userManagement.addUser')}
                 </Button>
               </span>
             </Tooltip>
@@ -483,7 +486,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
 
         <Menu anchorEl={filterAnchor} open={Boolean(filterAnchor)} onClose={() => setFilterAnchor(null)}>
           <MenuItem selected={!roleFilter} onClick={() => { setRoleFilter(null); setFilterAnchor(null) }}>
-            All roles
+            {t('userManagement.allRoles')}
           </MenuItem>
           <Divider />
           {ROLE_OPTIONS.map((opt) => (
@@ -492,7 +495,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
               selected={roleFilter === opt.value}
               onClick={() => { setRoleFilter(opt.value); setFilterAnchor(null) }}
             >
-              {opt.label} only
+              {t('userManagement.roleOnly', { role: opt.label })}
             </MenuItem>
           ))}
         </Menu>
@@ -509,10 +512,10 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
               border: '1px solid rgba(79,70,229,0.14)',
             }}
           >
-            <Typography variant="body2" sx={{ fontWeight: 700 }}>{selected.length} selected</Typography>
+            <Typography variant="body2" sx={{ fontWeight: 700 }}>{t('userManagement.selectedCount', { count: selected.length })}</Typography>
             <Stack direction="row" spacing={1}>
               <Button size="small" onClick={() => setSelected([])} sx={{ textTransform: 'none' }}>
-                Clear
+                {t('userManagement.clear')}
               </Button>
               <Button
                 size="small"
@@ -532,12 +535,12 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
                     }
                   }
                   setSelected([])
-                  setNotice({ severity: 'success', text: 'Selected accounts deactivated.' })
+                  setNotice({ severity: 'success', text: t('userManagement.selectedAccountsDeactivated') })
                   await load()
                 }}
                 sx={{ textTransform: 'none', borderRadius: 2 }}
               >
-                Deactivate selected
+                {t('userManagement.deactivateSelected')}
               </Button>
             </Stack>
           </Stack>
@@ -575,14 +578,14 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
                         checked={allOnPageSelected}
                         indeterminate={someOnPageSelected && !allOnPageSelected}
                         onChange={toggleAll}
-                        inputProps={{ 'aria-label': 'Select all users on this page' }}
+                        inputProps={{ 'aria-label': t('userManagement.selectAllAria') }}
                       />
                     </TableCell>
                   )}
-                  <TableCell>User name</TableCell>
-                  <TableCell>Access</TableCell>
-                  <TableCell>Last active</TableCell>
-                  <TableCell>Date added</TableCell>
+                  <TableCell>{t('userManagement.colUserName')}</TableCell>
+                  <TableCell>{t('userManagement.colAccess')}</TableCell>
+                  <TableCell>{t('userManagement.colLastActive')}</TableCell>
+                  <TableCell>{t('userManagement.colDateAdded')}</TableCell>
                   {isAdmin && <TableCell align="right" sx={{ width: 56 }} />}
                 </TableRow>
               </TableHead>
@@ -594,7 +597,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
                       <Stack alignItems="center" spacing={1} sx={{ color: 'text.disabled' }}>
                         <GroupIcon sx={{ fontSize: 36, opacity: 0.4 }} />
                         <Typography variant="body2">
-                          {term || roleFilter ? 'No users match your filters.' : 'No users yet.'}
+                          {term || roleFilter ? t('userManagement.noUsersMatchFilters') : t('userManagement.noUsersYet')}
                         </Typography>
                       </Stack>
                     </TableCell>
@@ -620,7 +623,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
                           size="small"
                           checked={selected.includes(u.id)}
                           onChange={() => toggleOne(u.id)}
-                          inputProps={{ 'aria-label': `Select ${u.full_name}` }}
+                          inputProps={{ 'aria-label': t('userManagement.selectUserAria', { name: u.full_name }) }}
                         />
                       </TableCell>
                     )}
@@ -635,12 +638,12 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
                             {u.full_name}
                             {u.id === me?.id && (
                               <Typography component="span" sx={{ ml: 0.75, fontSize: 11, color: 'text.disabled', fontWeight: 600 }}>
-                                (you)
+                                {t('userManagement.youSuffix')}
                               </Typography>
                             )}
                             {!u.is_active && (
                               <Typography component="span" sx={{ ml: 0.75, fontSize: 11, color: 'error.main', fontWeight: 700 }}>
-                                Deactivated
+                                {t('userManagement.deactivatedLabel')}
                               </Typography>
                             )}
                           </Typography>
@@ -656,11 +659,11 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
                         {displayTags(u).length === 0 ? (
                           <Typography variant="caption" sx={{ color: 'text.disabled' }}>—</Typography>
                         ) : (
-                          displayTags(u).map((label) => {
-                            const meta = tagMeta(label)
+                          displayTags(u).map(({ key, label }) => {
+                            const meta = tagMeta(key)
                             return (
                               <Chip
-                                key={label}
+                                key={key}
                                 size="small"
                                 label={label}
                                 sx={{
@@ -677,7 +680,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
 
                     <TableCell>
                       <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                        {u.last_login_at ? dateOf(u.last_login_at) : 'Never'}
+                        {u.last_login_at ? dateOf(u.last_login_at) : t('userManagement.never')}
                       </Typography>
                     </TableCell>
 
@@ -706,7 +709,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
             totalRecords={filtered.length}
             onPageChange={setPage}
             onPageSizeChange={changePageSize}
-            recordLabel="users"
+            recordLabel={t('userManagement.recordLabelUsers')}
           />
         </Paper>
 
@@ -717,13 +720,13 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
           onClose={() => setRowMenu(null)}
         >
           <MenuItem onClick={() => openEdit(rowMenu.user)} sx={{ fontSize: 13.5 }}>
-            Edit access
+            {t('userManagement.editAccess')}
           </MenuItem>
           {rowMenu?.user.id === me?.id ? (
-            <Tooltip title="You cannot change your own status" placement="left">
+            <Tooltip title={t('userManagement.cannotChangeOwnStatus')} placement="left">
               <span>
                 <MenuItem disabled sx={{ fontSize: 13.5 }}>
-                  {rowMenu?.user.is_active ? 'Deactivate' : 'Activate'}
+                  {rowMenu?.user.is_active ? t('userManagement.deactivate') : t('userManagement.activate')}
                 </MenuItem>
               </span>
             </Tooltip>
@@ -740,17 +743,17 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
               }}
               sx={{ fontSize: 13.5, color: rowMenu?.user.is_active ? 'error.main' : 'success.main' }}
             >
-              {rowMenu?.user.is_active ? 'Deactivate' : 'Activate'}
+              {rowMenu?.user.is_active ? t('userManagement.deactivate') : t('userManagement.activate')}
             </MenuItem>
           )}
 
           <Divider />
 
           {rowMenu?.user.id === me?.id ? (
-            <Tooltip title="You cannot delete your own account" placement="left">
+            <Tooltip title={t('userManagement.cannotDeleteOwnAccount')} placement="left">
               <span>
                 <MenuItem disabled sx={{ fontSize: 13.5 }}>
-                  Delete
+                  {t('userManagement.delete')}
                 </MenuItem>
               </span>
             </Tooltip>
@@ -760,30 +763,32 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
               sx={{ fontSize: 13.5, color: 'error.main' }}
             >
               <DeleteOutlineIcon sx={{ fontSize: 17, mr: 1 }} />
-              Delete
+              {t('userManagement.delete')}
             </MenuItem>
           )}
         </Menu>
 
         {/* ── Confirm deactivation ─────────────────────────────── */}
         <Dialog open={Boolean(confirmDeactivate)} onClose={() => setConfirmDeactivate(null)} PaperProps={{ sx: { borderRadius: 3, maxWidth: 420 } }}>
-          <DialogTitle sx={{ fontWeight: 700 }}>Deactivate this account?</DialogTitle>
+          <DialogTitle sx={{ fontWeight: 700 }}>{t('userManagement.deactivateDialogTitle')}</DialogTitle>
           <DialogContent>
             <DialogContentText>
-              <Box component="span" sx={{ fontWeight: 700 }}>{confirmDeactivate?.full_name}</Box> will
-              no longer be able to sign in. Their account and history are kept, and access can be
-              restored at any time.
+              <Trans
+                i18nKey="userManagement.deactivateBody"
+                values={{ name: confirmDeactivate?.full_name }}
+                components={{ bold: <Box component="span" sx={{ fontWeight: 700 }} /> }}
+              />
             </DialogContentText>
           </DialogContent>
           <DialogActions sx={{ px: 3, pb: 2.5 }}>
-            <Button onClick={() => setConfirmDeactivate(null)} sx={{ textTransform: 'none' }}>Cancel</Button>
+            <Button onClick={() => setConfirmDeactivate(null)} sx={{ textTransform: 'none' }}>{t('userManagement.cancel')}</Button>
             <Button
               variant="contained"
               color="error"
               onClick={() => setActive(confirmDeactivate, false)}
               sx={{ textTransform: 'none', borderRadius: 2 }}
             >
-              Deactivate
+              {t('userManagement.deactivate')}
             </Button>
           </DialogActions>
         </Dialog>
@@ -794,20 +799,20 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
           onClose={() => !deletingUser && setConfirmDelete(null)}
           PaperProps={{ sx: { borderRadius: 3, maxWidth: 440 } }}
         >
-          <DialogTitle sx={{ fontWeight: 700 }}>Delete this user?</DialogTitle>
+          <DialogTitle sx={{ fontWeight: 700 }}>{t('userManagement.deleteDialogTitle')}</DialogTitle>
           <DialogContent>
             {deleteError && <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>{deleteError}</Alert>}
             <DialogContentText>
-              <Box component="span" sx={{ fontWeight: 700 }}>{confirmDelete?.full_name}</Box> and
-              their account will be permanently removed. This cannot be undone.
-              {' '}If they have any configuration requests, skill-engine runs or guided
-              walkthroughs, deletion is refused — deactivate the account instead to
-              revoke access while keeping that history.
+              <Trans
+                i18nKey="userManagement.deleteBody"
+                values={{ name: confirmDelete?.full_name }}
+                components={{ bold: <Box component="span" sx={{ fontWeight: 700 }} /> }}
+              />
             </DialogContentText>
           </DialogContent>
           <DialogActions sx={{ px: 3, pb: 2.5 }}>
             <Button onClick={() => setConfirmDelete(null)} disabled={deletingUser} sx={{ textTransform: 'none' }}>
-              Cancel
+              {t('userManagement.cancel')}
             </Button>
             <Button
               variant="contained"
@@ -817,7 +822,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
               startIcon={deletingUser ? <CircularProgress size={15} color="inherit" /> : <DeleteOutlineIcon />}
               sx={{ textTransform: 'none', borderRadius: 2 }}
             >
-              {deletingUser ? 'Deleting...' : 'Delete'}
+              {deletingUser ? t('userManagement.deleting') : t('userManagement.delete')}
             </Button>
           </DialogActions>
         </Dialog>
@@ -825,7 +830,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
         {/* ── Add / edit user ──────────────────────────────────── */}
         <Dialog open={formOpen} onClose={() => !saving && setFormOpen(false)} fullWidth maxWidth="sm" PaperProps={{ sx: { borderRadius: 3 } }}>
           <DialogTitle sx={{ fontWeight: 700 }}>
-            {formMode === 'create' ? 'Add user' : `Edit access — ${editingUser?.full_name}`}
+            {formMode === 'create' ? t('userManagement.addUserDialogTitle') : t('userManagement.editAccessDialogTitle', { name: editingUser?.full_name })}
           </DialogTitle>
 
           <DialogContent>
@@ -835,12 +840,12 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
               {formMode === 'create' && (
                 <>
                   <TextField
-                    label="Full name" fullWidth required
+                    label={t('userManagement.fullNameLabel')} fullWidth required
                     value={form.full_name}
                     onChange={(e) => setForm((f) => ({ ...f, full_name: e.target.value }))}
                   />
                   <TextField
-                    label="Email" type="email" fullWidth required
+                    label={t('userManagement.emailLabel')} type="email" fullWidth required
                     value={form.email}
                     onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
                   />
@@ -848,15 +853,15 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
               )}
 
               <TextField
-                label="Address" fullWidth
-                placeholder="Optional"
+                label={t('userManagement.addressLabel')} fullWidth
+                placeholder={t('userManagement.addressPlaceholder')}
                 value={form.address}
                 onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
               />
 
               <Box>
                 <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, display: 'block', mb: 0.5 }}>
-                  Role
+                  {t('userManagement.roleLabel')}
                 </Typography>
                 <Select
                   fullWidth
@@ -871,14 +876,14 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
                 </Select>
                 {formMode === 'edit' && editingUser?.id === me?.id && (
                   <Typography variant="caption" sx={{ color: 'text.disabled', mt: 0.5, display: 'block' }}>
-                    You cannot change your own role.
+                    {t('userManagement.cannotChangeOwnRole')}
                   </Typography>
                 )}
               </Box>
 
               <Box>
                 <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, display: 'block', mb: 0.5 }}>
-                  Access
+                  {t('userManagement.accessLabel')}
                 </Typography>
                 <FormGroup row>
                   {ACCESS_OPTIONS.map((opt) => (
@@ -899,8 +904,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
 
               {formMode === 'create' && (
                 <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                  A temporary password is generated automatically and shown once the
-                  account is created.
+                  {t('userManagement.tempPasswordNotice')}
                 </Typography>
               )}
             </Stack>
@@ -908,7 +912,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
 
           <DialogActions sx={{ px: 3, pb: 2.5 }}>
             <Button onClick={() => setFormOpen(false)} disabled={saving} sx={{ textTransform: 'none' }}>
-              Cancel
+              {t('userManagement.cancel')}
             </Button>
             <Button
               variant="contained"
@@ -917,7 +921,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
               startIcon={saving ? <CircularProgress size={15} color="inherit" /> : undefined}
               sx={{ textTransform: 'none', borderRadius: 2, bgcolor: '#4f46e5', '&:hover': { bgcolor: '#4338ca' } }}
             >
-              {saving ? 'Saving...' : formMode === 'create' ? 'Create user' : 'Save changes'}
+              {saving ? t('userManagement.saving') : formMode === 'create' ? t('userManagement.createUser') : t('userManagement.saveChanges')}
             </Button>
           </DialogActions>
         </Dialog>
@@ -927,15 +931,15 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
           <DialogTitle sx={{ fontWeight: 700 }}>
             <Stack direction="row" alignItems="center" spacing={1}>
               <CheckCircleIcon sx={{ color: 'success.main' }} />
-              <span>Account created</span>
+              <span>{t('userManagement.accountCreated')}</span>
             </Stack>
           </DialogTitle>
           <DialogContent>
             <DialogContentText sx={{ mb: 2 }}>
               {credentials?.emailSent
-                ? <>A welcome email with a temporary password was sent to <strong>{credentials?.email}</strong>.</>
-                : <>Could not send a welcome email — hand this password to <strong>{credentials?.email}</strong> yourself.</>}
-              {' '}This is the only time it is shown.
+                ? <Trans i18nKey="userManagement.credentialsEmailSent" values={{ email: credentials?.email }} components={{ bold: <strong /> }} />
+                : <Trans i18nKey="userManagement.credentialsEmailNotSent" values={{ email: credentials?.email }} components={{ bold: <strong /> }} />}
+              {' '}{t('userManagement.credentialsShownOnce')}
             </DialogContentText>
 
             <Stack
@@ -951,7 +955,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
               <Typography sx={{ fontFamily: 'Consolas, monospace', fontWeight: 700, fontSize: 14 }}>
                 {credentials?.password}
               </Typography>
-              <Tooltip title="Copy">
+              <Tooltip title={t('userManagement.copy')}>
                 <IconButton size="small" onClick={copyPassword}>
                   <ContentCopyIcon sx={{ fontSize: 17 }} />
                 </IconButton>
@@ -960,7 +964,7 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
           </DialogContent>
           <DialogActions sx={{ px: 3, pb: 2.5 }}>
             <Button variant="contained" onClick={() => setCredentials(null)} sx={{ textTransform: 'none', borderRadius: 2, bgcolor: '#4f46e5', '&:hover': { bgcolor: '#4338ca' } }}>
-              Done
+              {t('userManagement.done')}
             </Button>
           </DialogActions>
         </Dialog>

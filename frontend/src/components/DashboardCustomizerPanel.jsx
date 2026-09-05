@@ -18,6 +18,7 @@ import RestartAltIconImport from '@mui/icons-material/RestartAlt'
 import PaletteIconImport from '@mui/icons-material/Palette'
 import TextFieldsIconImport from '@mui/icons-material/TextFields'
 import ViewSidebarIconImport from '@mui/icons-material/ViewSidebar'
+import { useTranslation } from 'react-i18next'
 import { useDashboardCustomizer } from '../context/DashboardCustomizerContext.jsx'
 import { useThemeMode } from '../context/ThemeContext.jsx'
 
@@ -40,6 +41,7 @@ const DashboardCustomizerPanel = () => {
     QUICK_THEMES,
   } = useDashboardCustomizer()
   const { mode } = useThemeMode()
+  const { t } = useTranslation('components')
 
   const colors = PRESET_COLORS[mode] || PRESET_COLORS.dark
   const sidebarBgs = PRESET_SIDEBAR_BGS[mode] || PRESET_SIDEBAR_BGS.dark
@@ -74,10 +76,10 @@ const DashboardCustomizerPanel = () => {
           <PaletteIcon color="primary" />
           <Box>
             <Typography variant="subtitle1" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
-              Dashboard Customizer
+              {t('dashboardCustomizerPanel.title')}
             </Typography>
             <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-              Personalize your workspace
+              {t('dashboardCustomizerPanel.subtitle')}
             </Typography>
           </Box>
         </Stack>
@@ -91,13 +93,12 @@ const DashboardCustomizerPanel = () => {
         <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
           <PaletteIcon fontSize="small" color="primary" />
           <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-            Theme
+            {t('dashboardCustomizerPanel.theme')}
           </Typography>
         </Stack>
 
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1 }}>
-          Sidebar look — one click sets the background and the
-          navigation accent together.
+          {t('dashboardCustomizerPanel.themeDescription')}
         </Typography>
 
         <Stack direction="row" spacing={1.5} sx={{ mb: 2.5 }}>
@@ -187,15 +188,15 @@ const DashboardCustomizerPanel = () => {
         <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
           <PaletteIcon fontSize="small" color="primary" />
           <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-            Colors
+            {t('dashboardCustomizerPanel.colors')}
           </Typography>
         </Stack>
 
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1 }}>
-          Primary Accent Color
+          {t('dashboardCustomizerPanel.primaryAccentColor')}
         </Typography>
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 0.5, mb: 1.5 }}>
-          <Tooltip title="Theme default">
+          <Tooltip title={t('dashboardCustomizerPanel.themeDefault')}>
             <Box
               onClick={() => updateSetting('primaryColor', null)}
               sx={{
@@ -272,7 +273,7 @@ const DashboardCustomizerPanel = () => {
           <input
             name="hex"
             defaultValue={settings.primaryColor || ''}
-            placeholder="#hex color"
+            placeholder={t('dashboardCustomizerPanel.hexColorPlaceholder')}
             style={{
               flex: 1,
               background: 'transparent',
@@ -291,15 +292,15 @@ const DashboardCustomizerPanel = () => {
             variant="outlined"
             sx={{ textTransform: 'none', fontSize: 11, minWidth: 40 }}
           >
-            Set
+            {t('dashboardCustomizerPanel.set')}
           </Button>
         </Box>
 
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1 }}>
-          Sidebar Background
+          {t('dashboardCustomizerPanel.sidebarBackground')}
         </Typography>
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 0.5, mb: 2 }}>
-          <Tooltip title="Theme default">
+          <Tooltip title={t('dashboardCustomizerPanel.themeDefault')}>
             <Box
               onClick={() => updateSetting('sidebarBg', null)}
               sx={{
@@ -345,12 +346,12 @@ const DashboardCustomizerPanel = () => {
         <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
           <ViewSidebarIcon fontSize="small" color="primary" />
           <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-            Layout
+            {t('dashboardCustomizerPanel.layout')}
           </Typography>
         </Stack>
 
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1 }}>
-          Sidebar Width: <strong>{settings.sidebarWidth}px</strong>
+          {t('dashboardCustomizerPanel.sidebarWidthLabel')} <strong>{settings.sidebarWidth}px</strong>
         </Typography>
         <Slider
           value={settings.sidebarWidth}
@@ -372,7 +373,7 @@ const DashboardCustomizerPanel = () => {
           }
           label={
             <Typography variant="body2" sx={{ fontSize: 13 }}>
-              Collapse sidebar
+              {t('dashboardCustomizerPanel.collapseSidebar')}
             </Typography>
           }
           sx={{ mb: 1.5 }}
@@ -384,12 +385,12 @@ const DashboardCustomizerPanel = () => {
         <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
           <TextFieldsIcon fontSize="small" color="primary" />
           <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-            Font Size
+            {t('dashboardCustomizerPanel.fontSize')}
           </Typography>
         </Stack>
 
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1 }}>
-          Scale: <strong>{settings.fontScale.toFixed(1)}x</strong>
+          {t('dashboardCustomizerPanel.scaleLabel')} <strong>{settings.fontScale.toFixed(1)}x</strong>
         </Typography>
         <Slider
           value={settings.fontScale}
@@ -429,14 +430,13 @@ const DashboardCustomizerPanel = () => {
               fontSize: 'inherit',
             }}
           >
-            Preview
+            {t('dashboardCustomizerPanel.preview')}
           </Typography>
           <Typography
             variant="body2"
             sx={{ fontSize: 'inherit', color: 'text.secondary' }}
           >
-            This is a sample text at {settings.fontScale.toFixed(1)}x scale. All dashboard
-            text will be scaled proportionally.
+            {t('dashboardCustomizerPanel.previewDescription', { scale: settings.fontScale.toFixed(1) })}
           </Typography>
         </Box>
       </Box>
@@ -456,7 +456,7 @@ const DashboardCustomizerPanel = () => {
           onClick={resetSettings}
           sx={{ textTransform: 'none', borderRadius: 2 }}
         >
-          Reset to Defaults
+          {t('dashboardCustomizerPanel.resetToDefaults')}
         </Button>
       </Box>
     </Drawer>

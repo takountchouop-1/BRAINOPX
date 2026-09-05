@@ -3,13 +3,13 @@
   "patterns": {
     "value must start with 'X'": {
       "signature": "value must start with 'X'",
-      "seen": 122,
+      "seen": 129,
       "corrections": [
         {
           "accepted": "TRF123",
           "rejected": "nope",
           "step": "Tariff Code",
-          "count": 58,
+          "count": 61,
           "first_seen": "2026-08-13T14:26:07"
         },
         {
@@ -41,11 +41,11 @@
           "first_seen": "2026-08-14T15:26:42"
         }
       ],
-      "last_seen": "2026-08-18T15:14:26"
+      "last_seen": "2026-08-29T19:31:32"
     },
     "value cannot be a generic placeholder": {
       "signature": "value cannot be a generic placeholder",
-      "seen": 62,
+      "seen": 64,
       "corrections": [
         {
           "accepted": "45.50",
@@ -83,7 +83,7 @@
           "first_seen": "2026-08-18T10:42:10"
         }
       ],
-      "last_seen": "2026-08-18T10:42:10"
+      "last_seen": "2026-08-26T15:41:25"
     },
     "value must be one of: active, inactive": {
       "signature": "value must be one of: active, inactive",
@@ -101,10 +101,10 @@
     },
     "value must be a valid phone number": {
       "signature": "value must be a valid phone number",
-      "seen": 6,
+      "seen": 7,
       "corrections": [],
-      "last_seen": "2026-08-18T16:00:03",
-      "withheld": 6
+      "last_seen": "2026-08-28T16:18:54",
+      "withheld": 7
     },
     "value must be one of: now, scheduled, daily": {
       "signature": "value must be one of: now, scheduled, daily",
@@ -136,7 +136,7 @@
     },
     "value must be one of: pending, sent, failed": {
       "signature": "value must be one of: pending, sent, failed",
-      "seen": 3,
+      "seen": 4,
       "corrections": [
         {
           "accepted": "FAILED",
@@ -158,13 +158,20 @@
           "step": "Notification Status",
           "count": 1,
           "first_seen": "2026-08-18T10:45:52"
+        },
+        {
+          "accepted": "sent",
+          "rejected": "noy",
+          "step": "Notification Status",
+          "count": 1,
+          "first_seen": "2026-08-24T11:38:54"
         }
       ],
-      "last_seen": "2026-08-18T10:45:52"
+      "last_seen": "2026-08-24T11:38:54"
     },
     "value must be 'X' followed by exactly N digits": {
       "signature": "value must be 'X' followed by exactly N digits",
-      "seen": 5,
+      "seen": 7,
       "corrections": [
         {
           "accepted": "TRF432",
@@ -193,9 +200,16 @@
           "step": "Unique Rule ID",
           "count": 1,
           "first_seen": "2026-08-18T15:23:28"
+        },
+        {
+          "accepted": "INV-1234",
+          "rejected": "INV-qwerty",
+          "step": "Unique Invoice Number",
+          "count": 1,
+          "first_seen": "2026-08-26T10:31:24"
         }
       ],
-      "last_seen": "2026-08-18T15:23:28",
+      "last_seen": "2026-08-26T15:25:39",
       "withheld": 1
     },
     "value must contain at least N characters": {
@@ -215,13 +229,13 @@
     },
     "value must be one of: usd, eur, gbp, jpy": {
       "signature": "value must be one of: usd, eur, gbp, jpy",
-      "seen": 2,
+      "seen": 3,
       "corrections": [
         {
           "accepted": "GBP",
           "rejected": "XAF",
           "step": "Allowed Currency",
-          "count": 1,
+          "count": 2,
           "first_seen": "2026-08-13T14:36:04"
         },
         {
@@ -232,7 +246,7 @@
           "first_seen": "2026-08-18T10:00:50"
         }
       ],
-      "last_seen": "2026-08-18T10:00:50"
+      "last_seen": "2026-08-26T15:30:17"
     },
     "value must have exactly N decimal places (you entered N)": {
       "signature": "value must have exactly N decimal places (you entered N)",
@@ -341,22 +355,36 @@
     },
     "value must be a whole number": {
       "signature": "value must be a whole number",
-      "seen": 3,
+      "seen": 6,
       "corrections": [
+        {
+          "accepted": "0",
+          "rejected": "NO",
+          "step": "Is Monthly",
+          "count": 2,
+          "first_seen": "2026-08-27T10:54:04"
+        },
         {
           "accepted": "4",
           "rejected": "3.9",
           "step": "Product ID",
           "count": 1,
           "first_seen": "2026-08-14T15:32:11"
+        },
+        {
+          "accepted": "2",
+          "rejected": "tem",
+          "step": "Template",
+          "count": 1,
+          "first_seen": "2026-08-26T16:31:07"
         }
       ],
-      "last_seen": "2026-08-18T10:49:16",
+      "last_seen": "2026-08-27T10:54:45",
       "withheld": 2
     },
     "value must be a valid date": {
       "signature": "value must be a valid date",
-      "seen": 4,
+      "seen": 6,
       "corrections": [
         {
           "accepted": "2026-9-7",
@@ -385,9 +413,17 @@
           "step": "Order Date",
           "count": 1,
           "first_seen": "2026-08-18T16:02:03"
+        },
+        {
+          "accepted": "10-23-2004",
+          "rejected": "10 decemeber 2014",
+          "step": "Payment Due Date",
+          "count": 1,
+          "first_seen": "2026-08-26T10:35:39"
         }
       ],
-      "last_seen": "2026-08-18T16:02:03"
+      "last_seen": "2026-08-26T10:39:07",
+      "withheld": 1
     },
     "value appears to be invalid. please provide a meaningful value": {
       "signature": "value appears to be invalid. please provide a meaningful value",
@@ -518,7 +554,7 @@
     },
     "value must be a valid number": {
       "signature": "value must be a valid number",
-      "seen": 4,
+      "seen": 8,
       "corrections": [
         {
           "accepted": "3.21",
@@ -547,9 +583,16 @@
           "step": "annual_profit",
           "count": 1,
           "first_seen": "2026-08-18T16:26:31"
+        },
+        {
+          "accepted": "12",
+          "rejected": "qwerty",
+          "step": "Taxes and Discounts",
+          "count": 1,
+          "first_seen": "2026-08-26T10:33:42"
         }
       ],
-      "last_seen": "2026-08-18T16:26:31"
+      "last_seen": "2026-08-29T19:34:24"
     },
     "value must be one of: standard, express, overnight": {
       "signature": "value must be one of: standard, express, overnight",
@@ -613,6 +656,125 @@
         }
       ],
       "last_seen": "2026-08-18T16:27:15"
+    },
+    "value must be one of: bank transfer, paypal, link": {
+      "signature": "value must be one of: bank transfer, paypal, link",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "Bank Transfer",
+          "rejected": "Bank Transfert",
+          "step": "Payment Instructions",
+          "count": 1,
+          "first_seen": "2026-08-26T10:38:20"
+        }
+      ],
+      "last_seen": "2026-08-26T10:38:20"
+    },
+    "value must contain exactly N characters": {
+      "signature": "value must contain exactly N characters",
+      "seen": 4,
+      "corrections": [
+        {
+          "accepted": "1",
+          "rejected": "TRF",
+          "step": "Traffic ID",
+          "count": 1,
+          "first_seen": "2026-08-26T16:18:46"
+        },
+        {
+          "accepted": "3",
+          "rejected": "Transport",
+          "step": "Transport Mode ID",
+          "count": 1,
+          "first_seen": "2026-08-26T16:24:05"
+        },
+        {
+          "accepted": "T",
+          "rejected": "traffic",
+          "step": "Traffic ID",
+          "count": 1,
+          "first_seen": "2026-08-26T22:02:54"
+        },
+        {
+          "accepted": "i",
+          "rejected": "IMPORT",
+          "step": "Traffic ID",
+          "count": 1,
+          "first_seen": "2026-08-27T10:52:50"
+        }
+      ],
+      "last_seen": "2026-08-27T10:52:50"
+    },
+    "value must be one of: N, N": {
+      "signature": "value must be one of: N, N",
+      "seen": 6,
+      "corrections": [
+        {
+          "accepted": "0",
+          "rejected": "08",
+          "step": "Is Enabled",
+          "count": 3,
+          "first_seen": "2026-08-26T16:31:23"
+        },
+        {
+          "accepted": "1",
+          "rejected": "9",
+          "step": "Is Monthly",
+          "count": 3,
+          "first_seen": "2026-08-26T16:30:50"
+        }
+      ],
+      "last_seen": "2026-08-26T22:04:08"
+    },
+    "value must contain no more than N characters": {
+      "signature": "value must contain no more than N characters",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "Logistics",
+          "rejected": "LOGISTICES & forwarding",
+          "step": "Module ID",
+          "count": 1,
+          "first_seen": "2026-08-27T10:51:46"
+        }
+      ],
+      "last_seen": "2026-08-27T10:51:46"
+    },
+    "value must be one of: yes, no": {
+      "signature": "value must be one of: yes, no",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "yes",
+          "rejected": "Activated the license, created the admin account, and configured the network for the new site.",
+          "step": "Installation Completion Confirmation",
+          "count": 1,
+          "first_seen": "2026-08-29T19:25:20"
+        }
+      ],
+      "last_seen": "2026-08-29T19:25:20"
+    },
+    "name is not properly capitalized and may not include both first and last name in the expected format": {
+      "signature": "name is not properly capitalized and may not include both first and last name in the expected format",
+      "seen": 1,
+      "corrections": [],
+      "last_seen": "2026-09-04T14:12:34",
+      "withheld": 1
+    },
+    "missing top-level domain; does not match email format": {
+      "signature": "missing top-level domain; does not match email format",
+      "seen": 1,
+      "corrections": [],
+      "last_seen": "2026-09-04T14:13:08",
+      "withheld": 1
+    },
+    "value must be a valid ipv4 or ipv6 address": {
+      "signature": "value must be a valid ipv4 or ipv6 address",
+      "seen": 1,
+      "corrections": [],
+      "last_seen": "2026-09-05T16:13:26",
+      "withheld": 1
     }
   }
 }

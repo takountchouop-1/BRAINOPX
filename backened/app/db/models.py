@@ -40,6 +40,9 @@ class User(Base):
     # is handled in one place.
     access = Column(Text, nullable=True)
 
+    # UI language + AI reply language: "en" | "fr".
+    language = Column(String(5), nullable=False, default="en", server_default="en")
+
 
 class ConfigurationTask(Base):
     __tablename__ = "configuration_tasks"
@@ -97,6 +100,11 @@ class ConfigurationRequest(Base):
     # come back as "medium" rather than NULL.
     priority = Column(String(20), nullable=False, default="medium", server_default="medium")
 
+    # Finer-grained sub-status for the report-analysis conversation flow,
+    # separate from `status` so nothing already reading `status` breaks.
+    # See app.services.report_analysis_service for the stage machine.
+    current_stage = Column(String(30), nullable=False, default="draft", server_default="draft")
+
     uploaded_filename = Column(String(255), nullable=True)
     uploaded_file_path = Column(String(500), nullable=True)
 
@@ -107,6 +115,104 @@ class ConfigurationRequest(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ReportReferenceFile(Base):
+    """
+    A supplementary file (e.g. a production extract) the user submits
+    mid-conversation to resolve an unknown-code anomaly on a report
+    analysis request. A request can accumulate several of these across
+    rounds — see app.services.report_analysis_service.
+    """
+
+    __tablename__ = "report_reference_files"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    request_id = Column(
+        Integer,
+        ForeignKey("configuration_requests.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    original_filename = Column(String(255), nullable=False)
+    stored_path = Column(String(500), nullable=False)
+    content_type = Column(String(100), nullable=True)
+    size_bytes = Column(Integer, nullable=True)
+
+    # Anomaly id (from eval_profile.analysis_state.anomalies) this file
+    # was requested to resolve.
+    linked_anomaly_id = Column(String(64), nullable=True)
+    comparison_result = Column(Text, nullable=True)  # JSON: row-level diff output
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ReportScriptVersion(Base):
+    """One generated SQL script for a report analysis request.
+
+    Kept as its own history table rather than overwriting
+    ConfigurationRequest.generated_script directly, so earlier versions
+    stay inspectable if the user resolves more anomalies and regenerates.
+    """
+
+    __tablename__ = "report_script_versions"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    request_id = Column(
+        Integer,
+        ForeignKey("configuration_requests.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    version_number = Column(Integer, nullable=False)
+    script_text = Column(Text, nullable=False)
+    row_count = Column(Integer, nullable=False, default=0)
+    generated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    generated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class StepAttachment(Base):
+    """
+    A file or screenshot the user submits mid-walkthrough because the
+    AI asked for one after several confused turns on the same step
+    (see app.services.guided_engine's off-track/confusion tracking).
+
+    Kept separate from ReportReferenceFile: that table is for a
+    production-extract cross-check tied to a report-analysis anomaly,
+    keyed off a specific column value. This one is a general "here is
+    what I'm looking at" attachment tied to a step index, used only to
+    give the AI more context for its explanation — never compared
+    against anything automatically.
+    """
+
+    __tablename__ = "step_attachments"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    request_id = Column(
+        Integer,
+        ForeignKey("configuration_requests.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    step_index = Column(Integer, nullable=False)
+    rule_name = Column(String(200), nullable=True)
+
+    original_filename = Column(String(255), nullable=False)
+    stored_path = Column(String(500), nullable=False)
+    content_type = Column(String(100), nullable=True)
+    size_bytes = Column(Integer, nullable=True)
+
+    # True for an image (screenshot/photo) — those have no extracted
+    # text, only a filename, since no OCR/vision pipeline reads them.
+    is_image = Column(Boolean, default=False)
+    extracted_text = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class SkillEngineRun(Base):

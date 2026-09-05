@@ -31,8 +31,10 @@ from typing import Optional
 
 from app.services.groq_service import (
     run_rule_workflow,
+    run_rule_followup,
     generate_rule_example_with_retry,
     deterministic_validate_example,
+    GroqNetworkError,
     MAX_RETRIES,
 )
 
@@ -44,6 +46,11 @@ from app.services import input_intent
 from app.services import step_presenter as presenter
 
 logger = logging.getLogger(__name__)
+
+# Consecutive off-track (question/confused) turns on the same step
+# before the AI stops re-explaining in words and asks for a file or
+# screenshot instead.
+CONFUSION_THRESHOLD = 2
 
 
 # ============================================================
@@ -109,6 +116,8 @@ def build_step(rule: dict, index: int) -> dict:
 
         "suggested_example": "",
 
+        "example_explanation": "",
+
         "example_validation": {},
 
         "example_generated": False,
@@ -159,7 +168,11 @@ def _generate_ai_example(rule: dict) -> dict:
     """
     Ask the model for an example, then let the validator decide.
 
-    The model never rules on its own output.
+    The model never rules on its own output. The explanation Groq
+    returns alongside the example is carried through too — it
+    describes the general format the field expects, not just why
+    this one value happens to pass, so the caller can show the user
+    more than a bare value to copy.
     """
 
     if not isinstance(rule, dict):
@@ -181,9 +194,10 @@ def _generate_ai_example(rule: dict) -> dict:
         return {"example": "", "valid": False}
 
     example = str(result.get("example") or "").strip()
+    explanation = str(result.get("explanation") or "").strip()
 
     if not example:
-        return {"example": "", "valid": False}
+        return {"example": "", "valid": False, "explanation": explanation}
 
     try:
         validation = deterministic_validate_example(
@@ -204,6 +218,7 @@ def _generate_ai_example(rule: dict) -> dict:
         "example": example,
         "valid": True,
         "validation": validation,
+        "explanation": explanation,
     }
 
 
@@ -251,6 +266,9 @@ def prepare_example(
         step["example_source"] = (
             (rule or {}).get("example_source") or "rule"
         )
+        step["example_explanation"] = str(
+            (rule or {}).get("example_explanation") or ""
+        ).strip()
         return explicit
 
     if rule:
@@ -262,6 +280,9 @@ def prepare_example(
             step["example_validation"] = generated.get("validation", {})
             step["example_generated"] = True
             step["example_source"] = "ai"
+            step["example_explanation"] = str(
+                generated.get("explanation") or ""
+            ).strip()
             return value
 
         # A rule was available but Groq could not produce a validated
@@ -271,6 +292,7 @@ def prepare_example(
         step["suggested_example"] = ""
         step["example_generated"] = False
         step["example_source"] = "ai_unavailable"
+        step["example_explanation"] = ""
         return ""
 
     # No rule to ask AI about at all (e.g. an orphaned step whose
@@ -290,12 +312,14 @@ def prepare_example(
         step["suggested_example"] = value
         step["example_generated"] = False
         step["example_source"] = "builder"
+        step["example_explanation"] = ""
         return value
 
     fallback = presenter.step_label(step)
 
     step["suggested_example"] = ""
     step["example_source"] = "none"
+    step["example_explanation"] = ""
 
     return f"A valid {fallback}" if fallback != "This step" else ""
 
@@ -390,6 +414,365 @@ def _asks_rather_than_answers(
     )
 
 
+def _advance_to_next_step(
+    *,
+    steps: list[dict],
+    current_index: int,
+    rules: list[dict],
+    step: dict,
+    value: str,
+    verdict: dict,
+) -> dict:
+    """
+    Complete the current step and open the next one.
+
+    Shared by a PASSED turn and a WARNING accepted via
+    _take_warning_acceptance_turn — both end the step the same way,
+    just with a different verdict attached.
+    """
+
+    total = len(steps)
+
+    step["status"] = "completed"
+    step["user_value"] = value
+    step["off_track_count"] = 0
+
+    # The user just recovered from an error. Remember how, so the
+    # next person who hits the same kind of error can be told.
+    # Only values that have passed validation reach here.
+
+    rejected = str(step.get("last_rejected") or "").strip()
+
+    if rejected:
+        try:
+            correction_memory.record_correction(
+                step=step,
+                rejected=rejected,
+                accepted=value,
+                verdict=step.get("last_failed_verdict") or {},
+            )
+        except Exception:
+            logger.exception(
+                "Could not record a correction for step '%s'",
+                step.get("rule_name", "unknown"),
+            )
+
+        step.pop("last_rejected", None)
+        step.pop("last_failed_verdict", None)
+
+    next_index = current_index + 1
+
+    if next_index < total:
+
+        next_step = steps[next_index]
+        next_step["status"] = "active"
+
+        next_rule = find_rule(rules, next_step.get("rule_id"))
+
+        # The next step's example is built from the NEXT rule.
+        # This is the step both engines previously got wrong in
+        # different ways.
+
+        prepare_example(
+            next_step,
+            next_rule,
+            force_new=True,
+        )
+
+        ensure_collection_started(next_step)
+
+        return {
+            "passed": True,
+            "current_index": next_index,
+            "all_completed": False,
+            "message_blocks": presenter.build_success_message(
+                step,
+                current_index,
+                total,
+                next_step=next_step,
+                submitted_value=value,
+            ),
+            "message_lines": presenter.lines_of(
+                presenter.build_success_message(
+                    step,
+                    current_index,
+                    total,
+                    next_step=next_step,
+                    submitted_value=value,
+                )
+            ),
+            "step": step,
+            "next_step": next_step,
+            "verdict": verdict,
+            "public_verdict": presenter.public_verdict(verdict),
+        }
+
+    final_blocks = (
+        presenter.build_success_message(
+            step,
+            current_index,
+            total,
+            next_step=None,
+            submitted_value=value,
+        )
+        + presenter.build_all_completed_message(total)
+    )
+
+    return {
+        "passed": True,
+        "current_index": next_index,
+        "all_completed": True,
+        "message_blocks": final_blocks,
+        "message_lines": presenter.lines_of(final_blocks),
+        "step": step,
+        "next_step": None,
+        "verdict": verdict,
+        "public_verdict": presenter.public_verdict(verdict),
+    }
+
+
+# ============================================================
+# WARNING ACCEPT / DECLINE
+# ============================================================
+
+_YES_WORDS = {"yes", "y", "accept", "confirm", "continue", "proceed", "ok", "okay"}
+_NO_WORDS = {"no", "n", "decline", "cancel", "different", "change", "reject"}
+
+
+def _classify_yes_no(value: str) -> str:
+    """Whether a reply to a WARNING's accept/decline prompt means yes or no."""
+
+    lowered = value.strip().lower()
+
+    if lowered in _YES_WORDS:
+        return "yes"
+
+    if lowered in _NO_WORDS:
+        return "no"
+
+    return "unclear"
+
+
+def _take_warning_acceptance_turn(
+    *,
+    steps: list[dict],
+    current_index: int,
+    rules: list[dict],
+    user_input: str,
+    step: dict,
+    rule: dict,
+    awaiting: dict,
+) -> dict:
+    """One turn while a step is parked awaiting accept/decline of a WARNING."""
+
+    total = len(steps)
+    value = str(user_input or "").strip()
+    decision = _classify_yes_no(value)
+
+    if decision == "yes":
+
+        step.pop("awaiting_risk_acceptance", None)
+        step["warning_accepted"] = True
+
+        accepted_value = str(awaiting.get("value") or "")
+        verdict = awaiting.get("verdict") or {
+            "status": "warning",
+            "passed": True,
+        }
+
+        return _advance_to_next_step(
+            steps=steps,
+            current_index=current_index,
+            rules=rules,
+            step=step,
+            value=accepted_value,
+            verdict=verdict,
+        )
+
+    if decision == "no":
+
+        step.pop("awaiting_risk_acceptance", None)
+        step["status"] = "active"
+
+        correction = prepare_example(step, rule, force_new=False)
+
+        blocks = presenter.build_warning_declined_message(
+            step,
+            current_index,
+            total,
+            example=correction,
+        )
+
+        return {
+            "passed": False,
+            "current_index": current_index,
+            "all_completed": False,
+            "handled": True,
+            "intent": "warning_declined",
+            "message_blocks": blocks,
+            "message_lines": presenter.lines_of(blocks),
+            "step": step,
+            "next_step": None,
+            "verdict": {"status": "failed", "passed": False},
+            "public_verdict": {"status": "failed", "passed": False},
+        }
+
+    # Unclear reply: repeat the same accept/decline prompt unchanged.
+
+    verdict = awaiting.get("verdict") or {}
+
+    blocks = presenter.build_warning_message(
+        step,
+        current_index,
+        total,
+        verdict.get("warning_reason", ""),
+        example=str(awaiting.get("value") or ""),
+    )
+
+    return {
+        "passed": False,
+        "current_index": current_index,
+        "all_completed": False,
+        "handled": True,
+        "intent": "warning",
+        "message_blocks": blocks,
+        "message_lines": presenter.lines_of(blocks),
+        "step": step,
+        "next_step": None,
+        "verdict": {"status": "warning", "passed": True},
+        "public_verdict": {"status": "warning", "passed": True},
+    }
+
+
+_SKIP_ATTACHMENT_WORDS = {"skip", "no", "never mind", "nevermind", "cancel"}
+
+
+def _take_awaiting_attachment_turn(
+    *,
+    steps: list[dict],
+    current_index: int,
+    step: dict,
+    user_input: str,
+) -> dict:
+    """
+    One turn while a step is parked waiting for the file/screenshot
+    the AI asked for. A plain-text reply here is never judged as a
+    value — only "skip" resumes ordinary validation, and anything else
+    just repeats the reminder. The actual attachment arrives through
+    resolve_attachment(), a separate entry point the router calls once
+    the upload has been read.
+    """
+
+    total = len(steps)
+    value = str(user_input or "").strip().lower()
+
+    if value in _SKIP_ATTACHMENT_WORDS:
+        step.pop("awaiting_attachment", None)
+        step["off_track_count"] = 0
+
+        blocks = presenter.build_step_prompt(step, current_index, total)
+
+        return {
+            "passed": False,
+            "current_index": current_index,
+            "all_completed": False,
+            "handled": True,
+            "intent": "attachment_skipped",
+            "message_blocks": blocks,
+            "message_lines": presenter.lines_of(blocks),
+            "step": step,
+            "next_step": None,
+            "verdict": {"status": "failed", "passed": False},
+            "public_verdict": {"status": "failed", "passed": False},
+        }
+
+    blocks = presenter.build_awaiting_attachment_reminder_message(step, current_index, total)
+
+    return {
+        "passed": False,
+        "current_index": current_index,
+        "all_completed": False,
+        "handled": True,
+        "intent": "awaiting_attachment",
+        "message_blocks": blocks,
+        "message_lines": presenter.lines_of(blocks),
+        "step": step,
+        "next_step": None,
+        "verdict": {"status": "failed", "passed": False},
+        "public_verdict": {"status": "failed", "passed": False},
+    }
+
+
+def resolve_attachment(
+    *,
+    steps: list[dict],
+    current_index: int,
+    rules: list[dict],
+    step: dict,
+    attachment_summary: str,
+) -> dict:
+    """
+    Process the file/screenshot the AI asked for, and reply with an
+    explanation informed by it. The step stays active either way — an
+    attachment answers a question, it is never itself the step's value.
+
+    attachment_summary is plain text: extracted document content, or a
+    short note naming an image when it has no extractable text (no
+    OCR/vision pipeline reads pixels here — see StepAttachment).
+    """
+
+    total = len(steps)
+
+    rule = find_rule(rules, step.get("rule_id")) or step
+
+    step.pop("awaiting_attachment", None)
+    step["off_track_count"] = 0
+
+    explanation = ""
+
+    try:
+        explanation = run_rule_followup(
+            rule=rule,
+            user_message=(
+                "I attached a file to help explain what I mean:\n\n"
+                f"{attachment_summary}\n\n"
+                "Based on this, please explain what you need from me for this step."
+            ),
+            conversation_history=step.get("conversation", []),
+            previous_verdict=step.get("last_verdict"),
+        )
+    except GroqNetworkError:
+        logger.warning(
+            "Groq unreachable while explaining an attachment for step '%s'",
+            step.get("rule_name", "unknown"),
+        )
+    except Exception:
+        logger.exception(
+            "Attachment explanation failed for step '%s'",
+            step.get("rule_name", "unknown"),
+        )
+
+    example = prepare_example(step, rule, force_new=False)
+
+    blocks = presenter.build_attachment_processed_message(
+        step, current_index, total, explanation, example=example,
+    )
+
+    return {
+        "passed": False,
+        "current_index": current_index,
+        "all_completed": False,
+        "handled": True,
+        "intent": "attachment_processed",
+        "message_blocks": blocks,
+        "message_lines": presenter.lines_of(blocks),
+        "step": step,
+        "next_step": None,
+        "verdict": {"status": "failed", "passed": False},
+        "public_verdict": {"status": "failed", "passed": False},
+    }
+
+
 def take_turn(
     *,
     steps: list[dict],
@@ -448,6 +831,35 @@ def take_turn(
             rule=rule,
         )
 
+    # A value that triggered a WARNING is parked here awaiting an
+    # explicit accept/decline, rather than being judged again as a
+    # fresh value against the rule.
+    awaiting = step.get("awaiting_risk_acceptance")
+
+    if isinstance(awaiting, dict):
+        return _take_warning_acceptance_turn(
+            steps=steps,
+            current_index=current_index,
+            rules=rules,
+            user_input=user_input,
+            step=step,
+            rule=rule,
+            awaiting=awaiting,
+        )
+
+    # A step parked waiting for the file/screenshot the AI asked for
+    # (see _asks_for_attachment below) never reaches ordinary judgment
+    # for a plain-text turn — only a real attachment (handled by
+    # resolve_attachment, called from outside take_turn) or the word
+    # "skip" moves it forward.
+    if step.get("awaiting_attachment"):
+        return _take_awaiting_attachment_turn(
+            steps=steps,
+            current_index=current_index,
+            step=step,
+            user_input=user_input,
+        )
+
     value = str(user_input or "").strip()
 
     known_example = str(step.get("suggested_example") or "").strip()
@@ -466,6 +878,34 @@ def take_turn(
             known_example=known_example,
         )
 
+    except GroqNetworkError:
+
+        logger.warning(
+            "Groq unreachable while validating step '%s'",
+            step.get("rule_name", "unknown"),
+        )
+
+        network_blocks = presenter.build_network_error_message(
+            step,
+            current_index,
+            total,
+            example=known_example,
+        )
+
+        return {
+            "passed": False,
+            "current_index": current_index,
+            "all_completed": False,
+            "handled": False,
+            "intent": "network_error",
+            "message_blocks": network_blocks,
+            "message_lines": presenter.lines_of(network_blocks),
+            "step": step,
+            "next_step": None,
+            "verdict": {"status": "network_error", "passed": False},
+            "public_verdict": {"status": "network_error", "passed": False},
+        }
+
     except Exception:
 
         # The check itself failed. Nothing is wrong with what the
@@ -477,26 +917,21 @@ def take_turn(
             step.get("rule_name", "unknown"),
         )
 
+        error_blocks = presenter.build_error_message(
+            step,
+            current_index,
+            total,
+            example=known_example,
+        )
+
         return {
             "passed": False,
             "current_index": current_index,
             "all_completed": False,
             "handled": False,
             "intent": "error",
-            "message_blocks": presenter.build_error_message(
-                step,
-                current_index,
-                total,
-                example=known_example,
-            ),
-            "message_lines": presenter.lines_of(
-                presenter.build_error_message(
-                    step,
-                    current_index,
-                    total,
-                    example=known_example,
-                )
-            ),
+            "message_blocks": error_blocks,
+            "message_lines": presenter.lines_of(error_blocks),
             "step": step,
             "next_step": None,
             "verdict": {"status": "error", "passed": False},
@@ -510,27 +945,39 @@ def take_turn(
             "validation_errors": [],
         }
 
-    passed = verdict.get("status") == "passed"
+    status = verdict.get("status")
+
+    # PASSED, WARNING and NEEDS_MORE_INFO all mean the value cleared
+    # hard validation — only FAILED means it did not.
+    content_passed = status in ("passed", "warning", "needs_more_info")
 
     # A prose step only checks that enough words were written, so a
     # question long enough to clear the count was being ACCEPTED as
     # the content: "give me an example need help" satisfied a
     # three-word minimum. A question is never the answer to a step,
-    # however long it is.
+    # however long it is. Checked against any of the three positive
+    # outcomes, not just PASSED, so a question that happens to also
+    # be missing a narrative topic is still caught here rather than
+    # answered with "please also address X".
 
-    if passed and _asks_rather_than_answers(value, step, rule):
-        passed = False
+    if content_passed and _asks_rather_than_answers(value, step, rule):
+        content_passed = False
+        status = "failed"
         verdict = {
             "status": "failed",
             "passed": False,
             "validation_errors": [],
         }
 
+    passed = status == "passed"
+
     step["last_verdict"] = verdict
 
     # An attempt is a try at the value. A question or a greeting is
-    # counted below only if it was really an attempt.
-    if passed:
+    # counted below only if it was really an attempt. NEEDS_MORE_INFO
+    # is not counted — the spec treats it as "resume the same step",
+    # not a strike against the user.
+    if status in ("passed", "warning"):
         step["attempts"] = int(step.get("attempts", 0)) + 1
 
     # --------------------------------------------------------
@@ -538,97 +985,74 @@ def take_turn(
     # --------------------------------------------------------
 
     if passed:
+        return _advance_to_next_step(
+            steps=steps,
+            current_index=current_index,
+            rules=rules,
+            step=step,
+            value=value,
+            verdict=verdict,
+        )
 
-        step["status"] = "completed"
-        step["user_value"] = value
+    # --------------------------------------------------------
+    # Warning: hard-valid but risky. Park the value and ask the
+    # user to explicitly accept or decline before advancing.
+    # --------------------------------------------------------
 
-        # The user just recovered from an error. Remember how, so the
-        # next person who hits the same kind of error can be told.
-        # Only values that have passed validation reach here.
+    if status == "warning":
 
-        rejected = str(step.get("last_rejected") or "").strip()
+        step["status"] = "active"
+        step["awaiting_risk_acceptance"] = {
+            "value": value,
+            "verdict": verdict,
+        }
 
-        if rejected:
-            try:
-                correction_memory.record_correction(
-                    step=step,
-                    rejected=rejected,
-                    accepted=value,
-                    verdict=step.get("last_failed_verdict") or {},
-                )
-            except Exception:
-                logger.exception(
-                    "Could not record a correction for step '%s'",
-                    step.get("rule_name", "unknown"),
-                )
-
-            step.pop("last_rejected", None)
-            step.pop("last_failed_verdict", None)
-
-        next_index = current_index + 1
-
-        if next_index < total:
-
-            next_step = steps[next_index]
-            next_step["status"] = "active"
-
-            next_rule = find_rule(rules, next_step.get("rule_id"))
-
-            # The next step's example is built from the NEXT rule.
-            # This is the step both engines previously got wrong in
-            # different ways.
-
-            prepare_example(
-                next_step,
-                next_rule,
-                force_new=True,
-            )
-
-            ensure_collection_started(next_step)
-
-            return {
-                "passed": True,
-                "current_index": next_index,
-                "all_completed": False,
-                "message_blocks": presenter.build_success_message(
-                    step,
-                    current_index,
-                    total,
-                    next_step=next_step,
-                    submitted_value=value,
-                ),
-                "message_lines": presenter.lines_of(
-                    presenter.build_success_message(
-                        step,
-                        current_index,
-                        total,
-                        next_step=next_step,
-                        submitted_value=value,
-                    )
-                ),
-                "step": step,
-                "next_step": next_step,
-                "verdict": verdict,
-                "public_verdict": presenter.public_verdict(verdict),
-            }
-
-        final_blocks = (
-            presenter.build_success_message(
-                step,
-                current_index,
-                total,
-                next_step=None,
-                submitted_value=value,
-            )
-            + presenter.build_all_completed_message(total)
+        blocks = presenter.build_warning_message(
+            step,
+            current_index,
+            total,
+            verdict.get("warning_reason", ""),
+            example=value,
         )
 
         return {
-            "passed": True,
-            "current_index": next_index,
-            "all_completed": True,
-            "message_blocks": final_blocks,
-            "message_lines": presenter.lines_of(final_blocks),
+            "passed": False,
+            "current_index": current_index,
+            "all_completed": False,
+            "handled": True,
+            "intent": "warning",
+            "message_blocks": blocks,
+            "message_lines": presenter.lines_of(blocks),
+            "step": step,
+            "next_step": None,
+            "verdict": verdict,
+            "public_verdict": presenter.public_verdict(verdict),
+        }
+
+    # --------------------------------------------------------
+    # Needs more info: hard-valid but incomplete. Stay on the SAME
+    # step and name exactly what is still missing.
+    # --------------------------------------------------------
+
+    if status == "needs_more_info":
+
+        step["status"] = "active"
+
+        blocks = presenter.build_need_more_info_message(
+            step,
+            current_index,
+            total,
+            verdict.get("missing_topics", []),
+        )
+
+        return {
+            "passed": False,
+            "current_index": current_index,
+            "all_completed": False,
+            "handled": True,
+            "intent": "needs_more_info",
+            "message_blocks": blocks,
+            "message_lines": presenter.lines_of(blocks),
             "step": step,
             "next_step": None,
             "verdict": verdict,
@@ -672,12 +1096,70 @@ def take_turn(
         # Not an attempt at the value: answer what they actually did
         # and repeat what the step needs. No attempt is recorded.
 
+        step["off_track_count"] = int(step.get("off_track_count", 0)) + 1
+
+        # Words alone have not gotten through after several tries at
+        # explaining the same step — ask to see what the user is
+        # actually working with instead of explaining a third time.
+        if (
+            intent == input_intent.QUESTION_STEP
+            and step["off_track_count"] >= CONFUSION_THRESHOLD
+        ):
+            step["awaiting_attachment"] = True
+            step["off_track_count"] = 0
+
+            attachment_request = presenter.build_request_attachment_message(
+                step, current_index, total,
+            )
+
+            return {
+                "passed": False,
+                "current_index": current_index,
+                "all_completed": False,
+                "handled": True,
+                "intent": "attachment_requested",
+                "message_blocks": attachment_request,
+                "message_lines": presenter.lines_of(attachment_request),
+                "step": step,
+                "next_step": None,
+                "verdict": verdict,
+                "public_verdict": {
+                    "status": "not_a_value",
+                    "passed": False,
+                },
+            }
+
+        # A genuine question about this step gets a fresh, plain-
+        # language answer from the model — scoped to this one rule
+        # (run_rule_followup), not just the same canned reminder.
+        ai_explanation = ""
+
+        if intent == input_intent.QUESTION_STEP:
+            try:
+                ai_explanation = run_rule_followup(
+                    rule=rule,
+                    user_message=value,
+                    conversation_history=step.get("conversation", []),
+                    previous_verdict=step.get("last_verdict"),
+                )
+            except GroqNetworkError:
+                logger.warning(
+                    "Groq unreachable while explaining step '%s'",
+                    step.get("rule_name", "unknown"),
+                )
+            except Exception:
+                logger.exception(
+                    "Step explanation failed for step '%s'",
+                    step.get("rule_name", "unknown"),
+                )
+
         off_track = presenter.build_off_track_message(
             step,
             current_index,
             total,
             intent,
             example=correction,
+            ai_explanation=ai_explanation,
         )
 
         return {
@@ -697,6 +1179,7 @@ def take_turn(
             },
         }
 
+    step["off_track_count"] = 0
     step["attempts"] = int(step.get("attempts", 0)) + 1
 
     # Held so that, if the next value succeeds, the pair can be
@@ -1039,6 +1522,25 @@ def edit_completed_step(
             conversation_history=step.get("conversation", []),
             known_example=known_example,
         )
+    except GroqNetworkError:
+        logger.warning(
+            "Groq unreachable while validating edit for step '%s'",
+            step.get("rule_name", "unknown"),
+        )
+
+        message_blocks = presenter.build_network_error_message(
+            step, edit_index, len(steps), example=known_example,
+        )
+
+        return {
+            "edited": False,
+            "step_index": edit_index,
+            "step": step,
+            "message_blocks": message_blocks,
+            "message_lines": presenter.lines_of(message_blocks),
+            "verdict": {"status": "network_error", "passed": False},
+            "public_verdict": {"status": "network_error", "passed": False},
+        }
     except Exception:
         logger.exception(
             "Edit validation failed for step '%s'",

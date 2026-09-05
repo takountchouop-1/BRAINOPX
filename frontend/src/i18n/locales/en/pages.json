@@ -83,6 +83,11 @@
     "tasksFound_other": "{{count}} tasks found",
     "tasksFoundSearch_one": "{{count}} task found for \"{{term}}\"",
     "tasksFoundSearch_other": "{{count}} tasks found for \"{{term}}\"",
+    "validation": {
+      "needsReview_one": "{{count}} rule needs review",
+      "needsReview_other": "{{count}} rules need review",
+      "tooltipIntro": "These rules have no usable format or value type, so the AI may show inconsistent examples:"
+    },
     "errors": {
       "sessionExpired": "Your session has expired. Please sign in again.",
       "loadRequestsFailed": "Could not load requests ({{status}}).",
@@ -240,9 +245,103 @@
     "signUp": "Sign up",
     "badge": "AI-powered configuration",
     "titleLine1": "Brainopx",
-    "titleLine2": "intelligent assistant",
+    "titleLine2": "Intelligent Assistant",
     "subtitle": "BRAINOPX turns Excel templates and business rules into working configuration, guided by an assistant that understands your data.",
-    "cta": "Get started for free"
+    "cta": "Get started for free",
+    "floatTrusted": "Trusted by 50K+ People",
+    "floatTestimonial": "AI Helps Me Revitalize My Business",
+    "floatRating": "Five Star Recommend",
+    "features": {
+      "badge": "Features",
+      "titleLine1": "Powerful Features to",
+      "titleLine2": "Simplify Your Scheduling",
+      "subtitle": "Discover how our AI-driven tools can transform your productivity and streamline your day",
+      "tag": "Effortless Scheduling",
+      "headingPre": "Automate and",
+      "headingHighlight": "Configure",
+      "headingPost": "Business Tasks",
+      "description": "Our solution reduces manual effort, minimizes errors, and ensures seamless coordination, allowing you to focus on what truly matters.",
+      "chatQuestion": "When is the best day and time to do meeting with Andrew?",
+      "chatAnswer": "Sure, I can help you schedule this task. Here's a potential schedule for your week:",
+      "meetingWithAndrew": "Meeting with Andrew",
+      "aiSuggestion": "AI Suggestion",
+      "popupTitle": "Meeting with the Candidate",
+      "timeAndDate": "Time & Date",
+      "guests": "Guests",
+      "location": "Location",
+      "platform": "Platform",
+      "guestName": "Andrew",
+      "locationValue": "Remote",
+      "platformValue": "Zoom Meeting",
+      "dateValue": "27th May, 14:30",
+      "reschedule": "Reschedule",
+      "joinMeeting": "Join Meeting"
+    },
+    "solutions": {
+      "titleLine1": "Find An AI Solution",
+      "titleLine2": "For Your Business",
+      "subtitle": "Experience the future of communication with our AI-powered chat solution.",
+      "items": [
+        {
+          "title": "AI-Powered Chatbots",
+          "description": "Implement intelligent chatbots that can handle customer inquiries, provide instant support, and improve satisfaction around the clock."
+        },
+        {
+          "title": "Embracing Multilingual Support",
+          "description": "Expand your reach and cater to a global audience with chat services available in multiple languages."
+        },
+        {
+          "title": "Integration Capabilities",
+          "description": "Seamlessly integrate AI chat services into your existing systems and workflows."
+        },
+        {
+          "title": "Proactive Engagement",
+          "description": "Initiate proactive conversations with customers based on their behavior and needs."
+        }
+      ]
+    },
+    "finalCta": {
+      "titleLine1": "Ready to Transform",
+      "titleLine2": "Your Scheduling?",
+      "subtitle": "Join thousands of professionals who have already streamlined their scheduling with our AI Assistant.",
+      "cta": "Get Started"
+    },
+    "story": {
+      "kicker": "Customer Story",
+      "quote": "Our team no longer spends hours manually configuring Excel rules by hand. Brainopx is our secret weapon.",
+      "authorName": "Softronic Company",
+      "authorRole": "Douala",
+      "stat1Value": "45+",
+      "stat1Label": "Happy Customers",
+      "stat2Value": "5k+",
+      "stat2Label": "Hours Saved on Configuration",
+      "stat3Value": "4.8",
+      "stat3Label": "Review Rate"
+    },
+    "footer": {
+      "tagline": "Turning Excel templates and business rules into working configuration, guided by AI.",
+      "product": {
+        "title": "Product",
+        "features": "Features",
+        "aiAssistant": "AI Assistant",
+        "taskManagement": "Task Management",
+        "configurationRequests": "Configuration Requests"
+      },
+      "resources": {
+        "title": "Resources",
+        "helpCenter": "Help Center",
+        "documentation": "Documentation",
+        "contact": "Contact",
+        "community": "Community"
+      },
+      "company": {
+        "title": "Company",
+        "about": "About Us",
+        "terms": "Terms & Conditions",
+        "privacy": "Privacy Policy"
+      },
+      "copyright": "© {{year}} BRAINOPX. All rights reserved."
+    }
   },
   "profile": {
     "errorInvalidImageType": "Please choose a JPEG, PNG, GIF or WebP image.",
@@ -285,6 +384,8 @@
     "errorRegistrationFailedDefault": "Registration failed. Please try again.",
     "statusAccountCreated": "Account created successfully!",
     "errorRegisterFailedDefault": "Registration failed. Please try again.",
+    "backToHome": "Back to home",
+    "mascotAlt": "BRAINOPX mascot",
     "heroTitle": "Join BRAINOPX and configure with confidence",
     "welcome": "Create your account",
     "subtitle": "Start turning templates and rules into working configuration.",

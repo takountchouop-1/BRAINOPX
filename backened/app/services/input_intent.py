@@ -81,14 +81,34 @@ def is_pure_symbols(text: str) -> bool:
     return bool(stripped) and not re.search(r"[A-Za-z0-9]", stripped)
 
 
-def _looks_unintelligible(text: str) -> bool:
+def _step_expects_length(step: dict | None, length: int) -> bool:
+    """Whether the step's own rule calls for an answer this short."""
+
+    constraints = (step or {}).get("constraints") or {}
+
+    exact = constraints.get("exact_length")
+    if isinstance(exact, int) and exact == length:
+        return True
+
+    maximum = constraints.get("max_length")
+    if isinstance(maximum, int) and maximum == length:
+        return True
+
+    return False
+
+
+def _looks_unintelligible(text: str, step: dict | None = None) -> bool:
     """
     Nothing a person meant as an answer.
 
     Deliberately narrow: only very short runs with no vowel, or a
     value made entirely of punctuation. A short real answer that
     merely breaks the rule is a wrong value, not gibberish, and must
-    keep getting the corrective message.
+    keep getting the corrective message. A step whose own rule asks
+    for exactly this many characters (e.g. a single-letter code) is
+    never gibberish, however short — it must fall through to the
+    validator so a wrong single letter still gets a corrective
+    message instead of "not understood".
     """
 
     stripped = text.strip()
@@ -104,6 +124,9 @@ def _looks_unintelligible(text: str) -> bool:
     # Only judge pure-letter input; anything with digits could be an
     # identifier the user genuinely tried.
     if letters != re.sub(r"\s+", "", stripped):
+        return False
+
+    if _step_expects_length(step, len(letters)):
         return False
 
     if len(letters) < 2:
@@ -176,7 +199,7 @@ def classify(text: str, step: dict | None = None) -> str:
             else QUESTION_OTHER
         )
 
-    if _looks_unintelligible(value):
+    if _looks_unintelligible(value, step):
         return UNINTELLIGIBLE
 
     return VALUE

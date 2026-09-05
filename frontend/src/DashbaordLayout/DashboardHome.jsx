@@ -27,6 +27,8 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  Tab,
+  Tabs,
   Tooltip,
   Typography,
 } from '@mui/material'
@@ -40,6 +42,9 @@ import AccessTimeIconImport from '@mui/icons-material/AccessTime'
 import CheckCircleOutlineIconImport from '@mui/icons-material/CheckCircleOutline'
 import HourglassEmptyIconImport from '@mui/icons-material/HourglassEmpty'
 import PaginationBar from '../components/PaginationBar.jsx'
+import { useAuth } from '../context/AuthContext.jsx'
+import GraphAnalysis from './GraphAnalysis.jsx'
+import { useTranslation } from 'react-i18next'
 
 const RefreshIcon = RefreshIconImport?.default || RefreshIconImport
 const InboxIcon = InboxIconImport?.default || InboxIconImport
@@ -60,47 +65,55 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 // warning.main / success.main, so "In progress" and "Awaiting
 // response" were indistinguishable at a glance, which is the whole
 // point of a status column.
-const STATUS_META = {
-  draft:                           { label: 'Not started',       color: '#94a3b8' }, // slate
-  file_submitted:                  { label: 'Pending',           color: '#f59e0b' }, // amber
-  analysis_in_progress:            { label: 'In progress',       color: '#3b82f6' }, // blue
-  waiting_for_support_response:    { label: 'Awaiting response', color: '#eab308' }, // yellow
-  additional_information_required: { label: 'Needs information', color: '#ef4444' }, // red
-  data_corrected:                  { label: 'Corrected',         color: '#8b5cf6' }, // violet
-  data_validated:                  { label: 'Validated',         color: '#14b8a6' }, // teal
-  script_generated:                { label: 'Script generated',  color: '#0ea5e9' }, // sky
-  processing_completed:            { label: 'Completed',         color: '#16a34a' }, // green
-  escalation_required:             { label: 'Escalated',         color: '#dc2626' }, // deep red
+// Labels are translation keys (resolved with `t` at the call site via
+// statusOf/priorityOf below) so this table can be shared by both
+// DashboardHome and GraphAnalysis without baking in one language.
+export const STATUS_META = {
+  draft:                           { labelKey: 'dashboardHome.status.draft',                           color: '#94a3b8' }, // slate
+  file_submitted:                  { labelKey: 'dashboardHome.status.fileSubmitted',                    color: '#f59e0b' }, // amber
+  analysis_in_progress:            { labelKey: 'dashboardHome.status.analysisInProgress',                color: '#3b82f6' }, // blue
+  waiting_for_support_response:    { labelKey: 'dashboardHome.status.waitingForSupportResponse',         color: '#eab308' }, // yellow
+  additional_information_required: { labelKey: 'dashboardHome.status.additionalInformationRequired',     color: '#ef4444' }, // red
+  data_corrected:                  { labelKey: 'dashboardHome.status.dataCorrected',                     color: '#8b5cf6' }, // violet
+  data_validated:                  { labelKey: 'dashboardHome.status.dataValidated',                     color: '#14b8a6' }, // teal
+  script_generated:                { labelKey: 'dashboardHome.status.scriptGenerated',                   color: '#0ea5e9' }, // sky
+  processing_completed:            { labelKey: 'dashboardHome.status.processingCompleted',                color: '#16a34a' }, // green
+  escalation_required:             { labelKey: 'dashboardHome.status.escalationRequired',                 color: '#dc2626' }, // deep red
 }
 
-const statusOf = (status) =>
-  STATUS_META[status] || { label: status || 'Unknown', color: '#94a3b8' }
+export const statusOf = (status, t) => {
+  const meta = STATUS_META[status]
+  if (meta) return { label: t(meta.labelKey), color: meta.color }
+  return { label: status || t('dashboardHome.status.unknown'), color: '#94a3b8' }
+}
 
 // Urgency, hottest first. Deliberately clear of the status palette
 // above so a red priority is never mistaken for a red status.
-const PRIORITY_META = {
-  high:   { label: 'High',   color: '#dc2626', bg: 'rgba(220,38,38,0.12)' },
-  medium: { label: 'Medium', color: '#d97706', bg: 'rgba(217,119,6,0.14)' },
-  low:    { label: 'Low',    color: '#0284c7', bg: 'rgba(2,132,199,0.12)' },
+export const PRIORITY_META = {
+  high:   { labelKey: 'dashboardHome.priority.high',   color: '#dc2626', bg: 'rgba(220,38,38,0.12)' },
+  medium: { labelKey: 'dashboardHome.priority.medium', color: '#d97706', bg: 'rgba(217,119,6,0.14)' },
+  low:    { labelKey: 'dashboardHome.priority.low',    color: '#0284c7', bg: 'rgba(2,132,199,0.12)' },
 }
 
 const PRIORITY_ORDER = ['high', 'medium', 'low']
 
-const priorityOf = (priority) =>
-  PRIORITY_META[String(priority || 'medium').toLowerCase()] || PRIORITY_META.medium
+export const priorityOf = (priority, t) => {
+  const meta = PRIORITY_META[String(priority || 'medium').toLowerCase()] || PRIORITY_META.medium
+  return { label: t(meta.labelKey), color: meta.color, bg: meta.bg }
+}
 
-const initialsOf = (fullName) =>
+export const initialsOf = (fullName) =>
   fullName
     ? fullName.split(' ').filter(Boolean).slice(0, 2)
         .map((part) => part[0].toUpperCase()).join('')
     : '?'
 
-const profileUrlOf = (owner) =>
+export const profileUrlOf = (owner) =>
   owner?.profile_picture
     ? `${API_BASE}/uploads/profiles/${owner.profile_picture}`
     : undefined
 
-const dateOf = (value) => {
+export const dateOf = (value) => {
   if (!value) return '—'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '—'
@@ -113,7 +126,7 @@ const dateOf = (value) => {
  * A summary tile: coloured icon badge, a menu affordance, the figure,
  * and a one-line subtitle underneath — as in the reference dashboard.
  */
-const StatCard = ({ icon: Icon, iconColor, iconBg, label, value, subtitle }) => (
+export const StatCard = ({ icon: Icon, iconColor, iconBg, label, value, subtitle }) => (
   <Paper
     sx={{
       p: 2.5,
@@ -160,10 +173,13 @@ const StatCard = ({ icon: Icon, iconColor, iconBg, label, value, subtitle }) => 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
 
 const DashboardHome = ({ searchTerm = '' } = {}) => {
+  const { user } = useAuth()
+  const { t } = useTranslation('layout')
   const [summary, setSummary] = useState(null)
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [activeTab, setActiveTab] = useState(0)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -177,8 +193,8 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
       if (!resp.ok) {
         throw new Error(
           resp.status === 401
-            ? 'Your session has expired. Please sign in again.'
-            : `Could not load tasks (${resp.status}).`
+            ? t('dashboardHome.errors.sessionExpired')
+            : t('dashboardHome.errors.couldNotLoadTasksWithStatus', { status: resp.status })
         )
       }
 
@@ -186,11 +202,11 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
       setSummary(data.summary || null)
       setItems(data.items || [])
     } catch (err) {
-      setError(err.message || 'Could not load tasks.')
+      setError(err.message || t('dashboardHome.errors.couldNotLoadTasks'))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     load()
@@ -215,8 +231,8 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
   const filteredItems = items.filter((item) => {
     if (!searchTerm) return true
     const term = searchTerm.toLowerCase()
-    const status = statusOf(item.status)
-    const priority = priorityOf(item.priority)
+    const status = statusOf(item.status, t)
+    const priority = priorityOf(item.priority, t)
     return (
       (item.task_name && item.task_name.toLowerCase().includes(term)) ||
       (item.owner?.full_name && item.owner.full_name.toLowerCase().includes(term)) ||
@@ -283,8 +299,8 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
         throw new Error(
           body.detail ||
             (resp.status === 403
-              ? 'You can only change your own requests.'
-              : `Could not change the priority (${resp.status}).`)
+              ? t('dashboardHome.errors.onlyChangeOwnRequests')
+              : t('dashboardHome.errors.couldNotChangePriorityWithStatus', { status: resp.status }))
         )
       }
     } catch (err) {
@@ -293,7 +309,38 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
           row.id === item.id ? { ...row, priority: item.priority } : row
         )
       )
-      setNotice({ severity: 'error', text: err.message || 'Could not change the priority.' })
+      setNotice({ severity: 'error', text: err.message || t('dashboardHome.errors.couldNotChangePriority') })
+    }
+  }
+
+  const markComplete = async (item) => {
+    setRowMenu(null)
+    if (item.status === 'processing_completed') return
+    const previousStatus = item.status
+    setItems((prev) =>
+      prev.map((row) => (row.id === item.id ? { ...row, status: 'processing_completed' } : row))
+    )
+    try {
+      const token = localStorage.getItem('brainopx_token')
+      const resp = await fetch(`${API_BASE}/api/requests/${item.id}/complete`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}))
+        throw new Error(body.detail || t('dashboardHome.errors.couldNotCompleteTaskWithStatus', { status: resp.status }))
+      }
+      setNotice({ severity: 'success', text: t('dashboardHome.notices.taskCompleted') })
+      // Reload so summary.completed and each item's bucket (which the
+      // Graph Analysis tab keys its charts on) come back in sync with
+      // the server — the optimistic status patch above doesn't touch
+      // either of those.
+      await load()
+    } catch (err) {
+      setItems((prev) =>
+        prev.map((row) => (row.id === item.id ? { ...row, status: previousStatus } : row))
+      )
+      setNotice({ severity: 'error', text: err.message || t('dashboardHome.errors.couldNotCompleteTask') })
     }
   }
 
@@ -345,12 +392,12 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
           throw new Error(
             body.detail ||
               (resp.status === 403
-                ? 'You can only delete your own requests.'
-                : `Could not delete this task (${resp.status}).`)
+                ? t('dashboardHome.errors.onlyDeleteOwnRequests')
+                : t('dashboardHome.errors.couldNotDeleteTaskWithStatus', { status: resp.status }))
           )
         }
 
-        message = { severity: 'success', text: 'Task deleted.' }
+        message = { severity: 'success', text: t('dashboardHome.notices.taskDeleted') }
       } else {
         const resp = await fetch(`${API_BASE}/api/requests/bulk-delete`, {
           method: 'POST',
@@ -360,7 +407,7 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
 
         if (!resp.ok) {
           const body = await resp.json().catch(() => ({}))
-          throw new Error(body.detail || `Could not delete the selected tasks (${resp.status}).`)
+          throw new Error(body.detail || t('dashboardHome.errors.couldNotDeleteTasksWithStatus', { status: resp.status }))
         }
 
         const result = await resp.json()
@@ -370,9 +417,9 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
         message = refused
           ? {
               severity: 'warning',
-              text: `${result.deleted_count} deleted. ${refused} could not be — you can only delete your own requests.`,
+              text: t('dashboardHome.notices.partialDelete', { count: result.deleted_count, refused }),
             }
-          : { severity: 'success', text: `${result.deleted_count} tasks deleted.` }
+          : { severity: 'success', text: t('dashboardHome.notices.bulkDeleted', { count: result.deleted_count }) }
       }
 
       setPendingDelete(null)
@@ -380,7 +427,7 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
       setNotice(message)
       await load()
     } catch (err) {
-      setNotice({ severity: 'error', text: err.message || 'Could not delete.' })
+      setNotice({ severity: 'error', text: err.message || t('dashboardHome.errors.couldNotDelete') })
     } finally {
       setDeleting(false)
     }
@@ -427,10 +474,10 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
         >
           <Box>
             <Typography variant="h4" sx={{ fontWeight: 700, mb: 0.5, color: 'text.primary' }}>
-              Dashboard
+              {t('dashboardHome.title')}
             </Typography>
             <Typography variant="body1" sx={{ color: 'text.secondary' }}>
-              Progress across every configuration task, and who is working on it.
+              {t('dashboardHome.subtitle')}
             </Typography>
           </Box>
 
@@ -441,7 +488,7 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
                 sx={{ '& .MuiAvatar-root': { width: 32, height: 32, fontSize: 12 } }}
               >
                 {contributors.map((owner) => (
-                  <Tooltip key={owner.id} title={owner.full_name || 'User'}>
+                  <Tooltip key={owner.id} title={owner.full_name || t('dashboardHome.user')}>
                     <Avatar src={profileUrlOf(owner)} alt={owner.full_name}>
                       {initialsOf(owner.full_name)}
                     </Avatar>
@@ -449,7 +496,7 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
                 ))}
               </AvatarGroup>
             )}
-            <Tooltip title="Refresh">
+            <Tooltip title={t('dashboardHome.refresh')}>
               <span>
                 <IconButton onClick={load} disabled={loading}>
                   <RefreshIcon />
@@ -458,6 +505,71 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
             </Tooltip>
           </Stack>
         </Stack>
+
+        {/* ── Overview / Graph Analysis ───────────────────────────── */}
+        <Tabs
+          value={activeTab}
+          onChange={(_e, value) => setActiveTab(value)}
+          sx={{
+            mb: 3,
+            minHeight: 40,
+            borderBottom: (theme) =>
+              `1px solid ${theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.1)' : '#e5e7eb'}`,
+            '& .MuiTab-root': {
+              textTransform: 'none',
+              fontWeight: 700,
+              minHeight: 40,
+              fontSize: 14,
+            },
+          }}
+        >
+          <Tab label={t('dashboardHome.tabs.overview')} />
+          <Tab label={t('dashboardHome.tabs.graphAnalysis')} />
+        </Tabs>
+
+        {activeTab === 1 && <GraphAnalysis items={items} loading={loading} />}
+
+        {activeTab !== 1 && (
+        <>
+        {/* ── Your account ────────────────────────────────────────── */}
+        {user && (
+          <Paper
+            sx={{
+              p: 2.5,
+              mb: 3,
+              borderRadius: 3,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 2,
+            }}
+          >
+            <Avatar
+              src={profileUrlOf(user)}
+              alt={user.full_name}
+              sx={{ width: 56, height: 56, fontSize: 20 }}
+            >
+              {initialsOf(user.full_name)}
+            </Avatar>
+            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700, color: 'text.primary' }} noWrap>
+                {user.full_name || t('dashboardHome.welcome')}
+              </Typography>
+              <Typography variant="body2" sx={{ color: 'text.secondary' }} noWrap>
+                {user.email}
+              </Typography>
+            </Box>
+            <Chip
+              label={user.role === 'admin' ? t('dashboardHome.administrator') : t('dashboardHome.member')}
+              size="small"
+              sx={{
+                textTransform: 'capitalize',
+                fontWeight: 600,
+                bgcolor: user.role === 'admin' ? 'rgba(79,70,229,0.12)' : 'rgba(100,116,139,0.12)',
+                color: user.role === 'admin' ? '#4f46e5' : '#475569',
+              }}
+            />
+          </Paper>
+        )}
 
         {error && (
           <Paper
@@ -480,9 +592,9 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
               icon={AssignmentOutlinedIcon}
               iconColor="#4f46e5"
               iconBg="rgba(79,70,229,0.12)"
-              label="Total Tasks"
+              label={t('dashboardHome.stats.totalTasks')}
               value={total}
-              subtitle={`${createdThisMonth} created this month`}
+              subtitle={t('dashboardHome.stats.createdThisMonth', { count: createdThisMonth })}
             />
           </Grid>
           <Grid item xs={12} sm={6} md={3}>
@@ -490,9 +602,9 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
               icon={AccessTimeIcon}
               iconColor="#3b82f6"
               iconBg="rgba(59,130,246,0.12)"
-              label="In Progress"
+              label={t('dashboardHome.stats.inProgress')}
               value={summary?.pending || 0}
-              subtitle="Currently being worked on"
+              subtitle={t('dashboardHome.stats.currentlyBeingWorkedOn')}
             />
           </Grid>
           <Grid item xs={12} sm={6} md={3}>
@@ -500,9 +612,9 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
               icon={CheckCircleOutlineIcon}
               iconColor="#16a34a"
               iconBg="rgba(22,163,74,0.12)"
-              label="Completed"
+              label={t('dashboardHome.stats.completed')}
               value={summary?.completed || 0}
-              subtitle={`${completedThisWeek} finished this week`}
+              subtitle={t('dashboardHome.stats.finishedThisWeek', { count: completedThisWeek })}
             />
           </Grid>
           <Grid item xs={12} sm={6} md={3}>
@@ -510,9 +622,9 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
               icon={HourglassEmptyIcon}
               iconColor="#f59e0b"
               iconBg="rgba(245,158,11,0.12)"
-              label="Not Started"
+              label={t('dashboardHome.stats.notStarted')}
               value={summary?.not_started || 0}
-              subtitle="Waiting to be picked up"
+              subtitle={t('dashboardHome.stats.waitingToBePickedUp')}
             />
           </Grid>
         </Grid>
@@ -546,7 +658,7 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
               }}
             >
               <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                {selected.length} selected
+                {t('dashboardHome.selection.selectedCount', { count: selected.length })}
               </Typography>
 
               <Stack direction="row" spacing={1}>
@@ -555,7 +667,7 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
                   onClick={() => setSelected([])}
                   sx={{ textTransform: 'none' }}
                 >
-                  Clear
+                  {t('dashboardHome.selection.clear')}
                 </Button>
                 <Button
                   size="small"
@@ -567,7 +679,7 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
                   }
                   sx={{ textTransform: 'none', borderRadius: 2 }}
                 >
-                  Delete selected
+                  {t('dashboardHome.selection.deleteSelected')}
                 </Button>
               </Stack>
             </Stack>
@@ -597,14 +709,14 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
                       checked={allOnPageSelected}
                       indeterminate={someOnPageSelected && !allOnPageSelected}
                       onChange={toggleAll}
-                      inputProps={{ 'aria-label': 'Select all tasks on this page' }}
+                      inputProps={{ 'aria-label': t('dashboardHome.table.selectAllAria') }}
                     />
                   </TableCell>
-                  <TableCell>Task Name</TableCell>
-                  <TableCell>Assignee</TableCell>
-                  <TableCell>Priority</TableCell>
-                  <TableCell>Status</TableCell>
-                  <TableCell>Updated</TableCell>
+                  <TableCell>{t('dashboardHome.table.taskName')}</TableCell>
+                  <TableCell>{t('dashboardHome.table.assignee')}</TableCell>
+                  <TableCell>{t('dashboardHome.table.priority')}</TableCell>
+                  <TableCell>{t('dashboardHome.table.status')}</TableCell>
+                  <TableCell>{t('dashboardHome.table.updated')}</TableCell>
                   <TableCell align="right" sx={{ width: 60 }} />
                 </TableRow>
               </TableHead>
@@ -617,8 +729,8 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
                         <InboxIcon sx={{ fontSize: 36, opacity: 0.4 }} />
                         <Typography variant="body2">
                           {items.length === 0
-                            ? 'No configuration tasks yet.'
-                            : `No tasks match "${searchTerm}".`}
+                            ? t('dashboardHome.table.noTasksYet')
+                            : t('dashboardHome.table.noTasksMatch', { term: searchTerm })}
                         </Typography>
                       </Stack>
                     </TableCell>
@@ -626,7 +738,7 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
                 )}
 
                 {pagedItems.map((item) => {
-                  const meta = statusOf(item.status)
+                  const meta = statusOf(item.status, t)
 
                   return (
                     <TableRow
@@ -646,16 +758,19 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
                           size="small"
                           checked={selected.includes(item.id)}
                           onChange={() => toggleOne(item.id)}
-                          inputProps={{ 'aria-label': `Select ${item.task_name}` }}
+                          inputProps={{ 'aria-label': t('dashboardHome.table.selectRowAria', { name: item.task_name }) }}
                         />
                       </TableCell>
 
                       <TableCell>
-                        <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                        <Typography
+                          variant="body2"
+                          sx={{ fontFamily: "'Nunito', 'Inter', 'Roboto', sans-serif", fontWeight: 700 }}
+                        >
                           {item.task_name}
                         </Typography>
                         <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                          {item.uploaded_filename || 'No file uploaded'}
+                          {item.uploaded_filename || t('dashboardHome.table.noFileUploaded')}
                         </Typography>
                       </TableCell>
 
@@ -663,7 +778,7 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
                         <Stack direction="row" alignItems="center" spacing={1}>
                           <Avatar
                             src={profileUrlOf(item.owner)}
-                            alt={item.owner?.full_name || 'Unassigned'}
+                            alt={item.owner?.full_name || t('dashboardHome.table.unassigned')}
                             sx={{
                               width: 28,
                               height: 28,
@@ -676,13 +791,13 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
                             {initialsOf(item.owner?.full_name)}
                           </Avatar>
                           <Typography variant="body2" sx={{ whiteSpace: 'nowrap' }}>
-                            {item.owner?.full_name || 'Unassigned'}
+                            {item.owner?.full_name || t('dashboardHome.table.unassigned')}
                           </Typography>
                         </Stack>
                       </TableCell>
 
                       <TableCell>
-                        <Tooltip title="Click to change priority">
+                        <Tooltip title={t('dashboardHome.table.clickToChangePriority')}>
                           <Typography
                             variant="body2"
                             onClick={(event) => setPriorityMenu({
@@ -691,12 +806,13 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
                             })}
                             sx={{
                               display: 'inline-block',
+                              fontFamily: "'Nunito', 'Inter', 'Roboto', sans-serif",
                               fontWeight: 700,
                               cursor: 'pointer',
-                              color: priorityOf(item.priority).color,
+                              color: priorityOf(item.priority, t).color,
                             }}
                           >
-                            {priorityOf(item.priority).label}
+                            {priorityOf(item.priority, t).label}
                           </Typography>
                         </Tooltip>
                       </TableCell>
@@ -745,7 +861,7 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
             totalRecords={items.length}
             onPageChange={setPage}
             onPageSizeChange={changePageSize}
-            recordLabel="records"
+            recordLabel={t('dashboardHome.table.recordsLabel')}
           />
         </Paper>
 
@@ -757,6 +873,18 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
           anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
           transformOrigin={{ vertical: 'top', horizontal: 'right' }}
         >
+          {rowMenu?.item && rowMenu.item.status !== 'processing_completed' && (
+            <MenuItem
+              disabled={rowMenu.item.progress < 100}
+              onClick={() => markComplete(rowMenu.item)}
+              sx={{ fontSize: 13, gap: 1.25 }}
+            >
+              <CheckCircleOutlineIcon sx={{ fontSize: 18 }} />
+              {rowMenu.item.progress < 100
+                ? t('dashboardHome.rowMenu.finishAllStepsFirst')
+                : t('dashboardHome.rowMenu.markAsCompleted')}
+            </MenuItem>
+          )}
           <MenuItem
             onClick={() => {
               setPendingDelete([rowMenu.item])
@@ -765,7 +893,7 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
             sx={{ fontSize: 13, gap: 1.25, color: 'error.main' }}
           >
             <DeleteOutlineIcon sx={{ fontSize: 18 }} />
-            Delete
+            {t('dashboardHome.rowMenu.delete')}
           </MenuItem>
         </Menu>
 
@@ -797,7 +925,7 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
                     flexShrink: 0,
                   }}
                 />
-                {meta.label}
+                {t(meta.labelKey)}
               </MenuItem>
             )
           })}
@@ -811,8 +939,8 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
         >
           <DialogTitle sx={{ fontWeight: 700 }}>
             {pendingDelete?.length > 1
-              ? `Delete ${pendingDelete.length} tasks?`
-              : 'Delete this task?'}
+              ? t('dashboardHome.deleteDialog.titlePlural', { count: pendingDelete.length })
+              : t('dashboardHome.deleteDialog.titleSingle')}
           </DialogTitle>
 
           <DialogContent>
@@ -825,7 +953,7 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
                   {pendingDelete[0].uploaded_filename
                     ? ` (${pendingDelete[0].uploaded_filename})`
                     : ''}{' '}
-                  will be removed.
+                  {t('dashboardHome.deleteDialog.willBeRemoved')}
                 </Typography>
               ) : (
                 // Naming them makes an accidental selection obvious
@@ -851,12 +979,9 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
               )}
 
               <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                {pendingDelete?.length > 1 ? 'Their' : 'Its'} conversation,
-                progress and uploaded file go with{' '}
-                {pendingDelete?.length > 1 ? 'them' : 'it'}. This cannot be
-                undone. The task template{pendingDelete?.length > 1 ? 's are' : ' itself is'}{' '}
-                kept, so a new request can be started from{' '}
-                {pendingDelete?.length > 1 ? 'them' : 'it'}.
+                {pendingDelete?.length > 1
+                  ? t('dashboardHome.deleteDialog.consequencePlural')
+                  : t('dashboardHome.deleteDialog.consequenceSingular')}
               </Typography>
             </DialogContentText>
           </DialogContent>
@@ -867,7 +992,7 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
               disabled={deleting}
               sx={{ textTransform: 'none' }}
             >
-              Cancel
+              {t('dashboardHome.deleteDialog.cancel')}
             </Button>
             <Button
               onClick={confirmDelete}
@@ -882,10 +1007,10 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
               sx={{ textTransform: 'none', borderRadius: 2 }}
             >
               {deleting
-                ? 'Deleting...'
+                ? t('dashboardHome.deleteDialog.deleting')
                 : pendingDelete?.length > 1
-                ? `Delete ${pendingDelete.length}`
-                : 'Delete'}
+                ? t('dashboardHome.deleteDialog.deleteCount', { count: pendingDelete.length })
+                : t('dashboardHome.deleteDialog.delete')}
             </Button>
           </DialogActions>
         </Dialog>
@@ -907,6 +1032,8 @@ const DashboardHome = ({ searchTerm = '' } = {}) => {
             </Alert>
           ) : undefined}
         </Snackbar>
+        </>
+        )}
       </Box>
     </Box>
   )

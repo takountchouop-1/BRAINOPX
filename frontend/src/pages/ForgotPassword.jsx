@@ -1,4 +1,5 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   Alert,
   Box,
@@ -10,21 +11,39 @@ import {
   InputAdornment,
   Link,
 } from '@mui/material'
-import EmailOutlinedIcon from '@mui/icons-material/EmailOutlined'
-import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
-import PinOutlinedIcon from '@mui/icons-material/PinOutlined'
+import EmailOutlinedIconImport from '@mui/icons-material/EmailOutlined'
+import LockOutlinedIconImport from '@mui/icons-material/LockOutlined'
+import PinOutlinedIconImport from '@mui/icons-material/PinOutlined'
 import {
   requestPasswordReset,
   verifyResetCode,
   resetPassword,
 } from '../services/Authenticationservice.js'
+import {
+  AUTH_PAGE_BG,
+  authButtonStyles,
+} from '../components/authentication/authStyles.js'
+
+const EmailOutlinedIcon = EmailOutlinedIconImport?.default || EmailOutlinedIconImport
+const LockOutlinedIcon = LockOutlinedIconImport?.default || LockOutlinedIconImport
+const PinOutlinedIcon = PinOutlinedIconImport?.default || PinOutlinedIconImport
 
 // Step numbers, for readability
 const STEP_REQUEST = 1
 const STEP_VERIFY = 2
 const STEP_RESET = 3
 
+// How long a reset code stays valid, mirrors RESET_CODE_VALID_MINUTES on the backend
+const CODE_VALID_MINUTES = 5
+
+const formatTimeLeft = (totalSeconds) => {
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`
+}
+
 const ForgotPassword = () => {
+  const { t } = useTranslation('pages')
   const [step, setStep] = useState(STEP_REQUEST)
 
   const [email, setEmail] = useState('')
@@ -36,6 +55,29 @@ const ForgotPassword = () => {
   const [status, setStatus] = useState('')
   const [isLoading, setIsLoading] = useState(false)
 
+  // Countdown session for the OTP code: set once a code is (re)sent, ticks
+  // down every second, and drives the expired state once it hits zero.
+  const [codeExpiresAt, setCodeExpiresAt] = useState(null)
+  const [secondsLeft, setSecondsLeft] = useState(0)
+
+  useEffect(() => {
+    if (!codeExpiresAt) {
+      setSecondsLeft(0)
+      return
+    }
+
+    const tick = () => {
+      const remaining = Math.max(0, Math.round((codeExpiresAt - Date.now()) / 1000))
+      setSecondsLeft(remaining)
+    }
+
+    tick()
+    const intervalId = setInterval(tick, 1000)
+    return () => clearInterval(intervalId)
+  }, [codeExpiresAt])
+
+  const isCodeExpired = step === STEP_VERIFY && codeExpiresAt !== null && secondsLeft <= 0
+
   const validateEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 
   // --- Step 1: request the code ---
@@ -45,17 +87,19 @@ const ForgotPassword = () => {
     setStatus('')
 
     if (!email.trim() || !validateEmail(email)) {
-      setError('Please enter a valid email address.')
+      setError(t('forgotPassword.errorInvalidEmail'))
       return
     }
 
     setIsLoading(true)
     try {
       const result = await requestPasswordReset({ email })
-      setStatus(result?.message || 'If this email is registered, a reset code has been sent.')
+      setStatus(result?.message || t('forgotPassword.statusCodeSentDefault'))
+      setCode('')
+      setCodeExpiresAt(Date.now() + CODE_VALID_MINUTES * 60 * 1000)
       setStep(STEP_VERIFY)
     } catch (err) {
-      setError(err?.message || 'Unable to send reset code. Try again later.')
+      setError(err?.message || t('forgotPassword.errorSendCodeFailed'))
     } finally {
       setIsLoading(false)
     }
@@ -67,18 +111,42 @@ const ForgotPassword = () => {
     setError('')
     setStatus('')
 
+    if (isCodeExpired) {
+      setError(t('forgotPassword.errorCodeExpired'))
+      return
+    }
+
     if (!code.trim() || code.trim().length !== 6) {
-      setError('Enter the 6-digit code sent to your email.')
+      setError(t('forgotPassword.errorInvalidCode'))
       return
     }
 
     setIsLoading(true)
     try {
       await verifyResetCode({ email, code })
-      setStatus('Code verified. Please set your new password.')
+      setStatus(t('forgotPassword.statusCodeVerified'))
       setStep(STEP_RESET)
     } catch (err) {
-      setError(err?.message || 'Invalid or expired code.')
+      setError(err?.message || t('forgotPassword.errorInvalidOrExpiredCode'))
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // --- Resend: request a fresh code without leaving the verify step ---
+  const handleResendCode = async (event) => {
+    if (event?.preventDefault) event.preventDefault()
+    setError('')
+    setStatus('')
+
+    setIsLoading(true)
+    try {
+      const result = await requestPasswordReset({ email })
+      setStatus(result?.message || t('forgotPassword.statusNewCodeSentDefault'))
+      setCode('')
+      setCodeExpiresAt(Date.now() + CODE_VALID_MINUTES * 60 * 1000)
+    } catch (err) {
+      setError(err?.message || t('forgotPassword.errorResendFailed'))
     } finally {
       setIsLoading(false)
     }
@@ -91,23 +159,23 @@ const ForgotPassword = () => {
     setStatus('')
 
     if (!newPassword || newPassword.length < 6) {
-      setError('Password must be at least 6 characters.')
+      setError(t('forgotPassword.errorPasswordTooShort'))
       return
     }
     if (newPassword !== confirmPassword) {
-      setError('Passwords do not match.')
+      setError(t('forgotPassword.errorPasswordsMismatch'))
       return
     }
 
     setIsLoading(true)
     try {
       const result = await resetPassword({ email, code, newPassword })
-      setStatus(result?.message || 'Password reset successfully. You can now sign in.')
+      setStatus(result?.message || t('forgotPassword.statusPasswordResetSuccess'))
       // Reset local state — user can navigate back to login from here
       setNewPassword('')
       setConfirmPassword('')
     } catch (err) {
-      setError(err?.message || 'Unable to reset password. The code may have expired.')
+      setError(err?.message || t('forgotPassword.errorResetFailed'))
     } finally {
       setIsLoading(false)
     }
@@ -118,7 +186,7 @@ const ForgotPassword = () => {
       component="main"
       sx={{
         minHeight: '100vh',
-        background: 'linear-gradient(180deg, #2b0338 0%, #3a0f64 35%, #6b1f8a 70%)',
+        background: AUTH_PAGE_BG,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -158,12 +226,12 @@ const ForgotPassword = () => {
         </Box>
 
         <Typography variant="h5" align="center" sx={{ fontWeight: 700, mb: 1 }}>
-          Reset your password
+          {t('forgotPassword.title')}
         </Typography>
         <Typography variant="body2" align="center" color="text.secondary" sx={{ mb: 4 }}>
-          {step === STEP_REQUEST && 'Enter your email to receive a reset code.'}
-          {step === STEP_VERIFY && `Enter the 6-digit code sent to ${email}.`}
-          {step === STEP_RESET && 'Choose a new password for your account.'}
+          {step === STEP_REQUEST && t('forgotPassword.subtitleRequest')}
+          {step === STEP_VERIFY && t('forgotPassword.subtitleVerify', { email })}
+          {step === STEP_RESET && t('forgotPassword.subtitleReset')}
         </Typography>
 
         {error ? <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert> : null}
@@ -175,8 +243,8 @@ const ForgotPassword = () => {
             <TextField
               fullWidth
               required
-              label="Email"
-              placeholder="Enter your email address"
+              label={t('forgotPassword.emailLabel')}
+              placeholder={t('forgotPassword.emailPlaceholder')}
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -195,15 +263,9 @@ const ForgotPassword = () => {
               fullWidth
               variant="contained"
               disabled={isLoading}
-              sx={{
-                py: 1.6,
-                borderRadius: 6,
-                textTransform: 'none',
-                background: 'linear-gradient(90deg, #6b1f8a 0%, #a02bbf 50%, #ff4ea1 100%)',
-                color: '#ffffff',
-              }}
+              sx={authButtonStyles}
             >
-              {isLoading ? 'Sending code...' : 'Send reset code'}
+              {isLoading ? t('forgotPassword.sendingCode') : t('forgotPassword.sendResetCode')}
             </Button>
           </Stack>
         )}
@@ -214,10 +276,11 @@ const ForgotPassword = () => {
             <TextField
               fullWidth
               required
-              label="6-digit code"
-              placeholder="Enter the code from your email"
+              label={t('forgotPassword.codeLabel')}
+              placeholder={t('forgotPassword.codePlaceholder')}
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              disabled={isCodeExpired}
               inputProps={{ maxLength: 6, inputMode: 'numeric' }}
               InputProps={{
                 startAdornment: (
@@ -228,37 +291,58 @@ const ForgotPassword = () => {
               }}
               sx={{ borderRadius: 3, background: '#ffffff' }}
             />
+
+            <Typography
+              align="center"
+              variant="body2"
+              color={isCodeExpired ? 'error' : 'text.secondary'}
+            >
+              {isCodeExpired
+                ? t('forgotPassword.codeExpiredShort')
+                : t('forgotPassword.codeExpiresIn', { time: formatTimeLeft(secondsLeft) })}
+            </Typography>
+
             <Button
               type="submit"
               fullWidth
               variant="contained"
-              disabled={isLoading}
-              sx={{
-                py: 1.6,
-                borderRadius: 6,
-                textTransform: 'none',
-                background: 'linear-gradient(90deg, #6b1f8a 0%, #a02bbf 50%, #ff4ea1 100%)',
-                color: '#ffffff',
-              }}
+              disabled={isLoading || isCodeExpired}
+              sx={authButtonStyles}
             >
-              {isLoading ? 'Verifying...' : 'Verify code'}
+              {isLoading ? t('forgotPassword.verifying') : t('forgotPassword.verifyCode')}
             </Button>
-            <Typography align="center" variant="body2" color="text.secondary">
-              Didn't get a code?{' '}
-              <Link
-                component="button"
-                type="button"
-                underline="hover"
-                onClick={(e) => {
-                  e.preventDefault()
-                  setStep(STEP_REQUEST)
-                  setStatus('')
-                  setError('')
-                }}
-              >
-                Try again
-              </Link>
-            </Typography>
+
+            {isCodeExpired ? (
+              <Typography align="center" variant="body2" color="text.secondary">
+                <Link
+                  component="button"
+                  type="button"
+                  underline="hover"
+                  onClick={handleResendCode}
+                >
+                  {t('forgotPassword.sendNewCode')}
+                </Link>
+              </Typography>
+            ) : (
+              <Typography align="center" variant="body2" color="text.secondary">
+                {t('forgotPassword.noCodeQuestion')}{' '}
+                <Link
+                  component="button"
+                  type="button"
+                  underline="hover"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    setStep(STEP_REQUEST)
+                    setStatus('')
+                    setError('')
+                    setCodeExpiresAt(null)
+                    setCode('')
+                  }}
+                >
+                  {t('forgotPassword.tryAgain')}
+                </Link>
+              </Typography>
+            )}
           </Stack>
         )}
 
@@ -268,7 +352,7 @@ const ForgotPassword = () => {
             <TextField
               fullWidth
               required
-              label="New password"
+              label={t('forgotPassword.newPasswordLabel')}
               type="password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
@@ -285,7 +369,7 @@ const ForgotPassword = () => {
             <TextField
               fullWidth
               required
-              label="Confirm new password"
+              label={t('forgotPassword.confirmNewPasswordLabel')}
               type="password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
@@ -304,23 +388,17 @@ const ForgotPassword = () => {
               fullWidth
               variant="contained"
               disabled={isLoading}
-              sx={{
-                py: 1.6,
-                borderRadius: 6,
-                textTransform: 'none',
-                background: 'linear-gradient(90deg, #6b1f8a 0%, #a02bbf 50%, #ff4ea1 100%)',
-                color: '#ffffff',
-              }}
+              sx={authButtonStyles}
             >
-              {isLoading ? 'Resetting...' : 'Reset password'}
+              {isLoading ? t('forgotPassword.resetting') : t('forgotPassword.resetPasswordButton')}
             </Button>
           </Stack>
         )}
 
         <Typography align="center" sx={{ color: 'text.secondary', mt: 4 }}>
-          Remembered your password?{' '}
+          {t('forgotPassword.rememberedPassword')}{' '}
           <Link href="/login" underline="hover">
-            Back to Sign In
+            {t('forgotPassword.backToSignIn')}
           </Link>
         </Typography>
       </Paper>

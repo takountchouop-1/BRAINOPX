@@ -16,6 +16,7 @@ import Dashboard from './DashbaordLayout/DashboardHome.jsx'
 
 //  Pages (these are in src/pages/)
 import Register from './pages/Register.jsx'
+import RegisterSuccess from './pages/RegisterSuccess.jsx'
 import Profile from './pages/Profile.jsx'
 import ConfigurationIngest from './pages/ConfigurationIngest.jsx'
 import TaskManagement from './pages/TaskManagement.jsx'
@@ -23,6 +24,8 @@ import SkillEngine from './pages/SkillEngine.jsx'
 import AiAssistant from './pages/AiAssistant.jsx'
 import UserManagement from './pages/UserManagement.jsx'
 import Landingpage from './pages/Landingpage.jsx'
+import ForgotPassword from './pages/ForgotPassword.jsx'
+import GoogleAuthCallback from './pages/GoogleAuthCallback.jsx'
 
 //  Route guard — redirects to /login if not authenticated
 const ProtectedRoute = ({ children }) => {
@@ -34,6 +37,27 @@ const ProtectedRoute = ({ children }) => {
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
+  }
+
+  return children
+}
+
+//  Route guard — on top of ProtectedRoute's auth check, also requires
+//  the "admin" role; a member hitting the URL directly is bounced to
+//  the dashboard instead of seeing the page.
+const AdminRoute = ({ children }) => {
+  const { user, isAuthenticated, isInitializing } = useAuth()
+
+  if (isInitializing) {
+    return null
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />
+  }
+
+  if (user?.role !== 'admin') {
+    return <Navigate to="/dashboard" replace />
   }
 
   return children
@@ -102,6 +126,9 @@ function AppContent() {
         <Route path="/landing" element={<Landingpage />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/register/success" element={<RegisterSuccess />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/auth/google/callback" element={<GoogleAuthCallback />} />
         <Route path="/" element={<ProtectedRoute><Layout {...layoutProps}><Dashboard /></Layout></ProtectedRoute>} />
         <Route path="/dashboard" element={<ProtectedRoute><Layout {...layoutProps}><Dashboard /></Layout></ProtectedRoute>} />
         <Route path="/dashboard/request" element={<ProtectedRoute><Layout {...layoutProps}><ConfigurationIngest /></Layout></ProtectedRoute>} />
@@ -112,7 +139,7 @@ function AppContent() {
         <Route path="/dashboard/ai-assistant" element={<ProtectedRoute><Layout {...layoutProps}><AiAssistant /></Layout></ProtectedRoute>} />
         {/* Same situation: the sidebar has always linked to
             /dashboard/users, but nothing was registered for it. */}
-        <Route path="/dashboard/users" element={<ProtectedRoute><Layout {...layoutProps}><UserManagement /></Layout></ProtectedRoute>} />
+        <Route path="/dashboard/users" element={<AdminRoute><Layout {...layoutProps}><UserManagement /></Layout></AdminRoute>} />
         <Route path="/profile" element={<ProtectedRoute><Layout {...layoutProps}><Profile /></Layout></ProtectedRoute>} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>

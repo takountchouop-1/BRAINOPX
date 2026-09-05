@@ -306,9 +306,9 @@ const GraphAnalysis = ({ items = [], loading = false }) => {
                   <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: tickColor }} axisLine={false} tickLine={false} />
                   <Tooltip {...tooltipSx} cursor={{ fill: 'rgba(148,163,184,0.08)' }} />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="not_started" name={t('graphAnalysis.bucket.notStarted')} stackId="a" fill={BUCKET_META.not_started.color} radius={[0, 0, 0, 0]} maxBarSize={54} />
-                  <Bar dataKey="pending" name={t('graphAnalysis.bucket.inProgress')} stackId="a" fill={BUCKET_META.pending.color} maxBarSize={54} />
-                  <Bar dataKey="completed" name={t('graphAnalysis.bucket.completed')} stackId="a" fill={BUCKET_META.completed.color} radius={[6, 6, 0, 0]} maxBarSize={54} />
+                  <Bar dataKey="not_started" name={t('graphAnalysis.bucket.notStarted')} fill={BUCKET_META.not_started.color} radius={[6, 6, 0, 0]} maxBarSize={54} />
+                  <Bar dataKey="pending" name={t('graphAnalysis.bucket.inProgress')} fill={BUCKET_META.pending.color} radius={[6, 6, 0, 0]} maxBarSize={54} />
+                  <Bar dataKey="completed" name={t('graphAnalysis.bucket.completed')} fill={BUCKET_META.completed.color} radius={[6, 6, 0, 0]} maxBarSize={54} />
                 </BarChart>
               </ResponsiveContainer>
             </Box>
@@ -414,9 +414,9 @@ const GraphAnalysis = ({ items = [], loading = false }) => {
                   <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: tickColor }} axisLine={false} tickLine={false} />
                   <Tooltip {...tooltipSx} cursor={{ fill: 'rgba(148,163,184,0.08)' }} />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="not_started" name={t('graphAnalysis.bucket.notStarted')} stackId="a" fill={BUCKET_META.not_started.color} radius={[0, 0, 0, 0]} maxBarSize={54} />
-                  <Bar dataKey="pending" name={t('graphAnalysis.bucket.inProgress')} stackId="a" fill={BUCKET_META.pending.color} maxBarSize={54} />
-                  <Bar dataKey="completed" name={t('graphAnalysis.bucket.completed')} stackId="a" fill={BUCKET_META.completed.color} radius={[6, 6, 0, 0]} maxBarSize={54} />
+                  <Bar dataKey="not_started" name={t('graphAnalysis.bucket.notStarted')} fill={BUCKET_META.not_started.color} radius={[6, 6, 0, 0]} maxBarSize={54} />
+                  <Bar dataKey="pending" name={t('graphAnalysis.bucket.inProgress')} fill={BUCKET_META.pending.color} radius={[6, 6, 0, 0]} maxBarSize={54} />
+                  <Bar dataKey="completed" name={t('graphAnalysis.bucket.completed')} fill={BUCKET_META.completed.color} radius={[6, 6, 0, 0]} maxBarSize={54} />
                 </BarChart>
               </ResponsiveContainer>
             </Box>

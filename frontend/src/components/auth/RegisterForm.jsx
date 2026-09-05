@@ -10,18 +10,20 @@ import {
   Typography,
   Link,
 } from '@mui/material'
+import { useTranslation } from 'react-i18next'
 import StepIndicator from './StepIndicator.jsx'
 
-const steps = [
-  { label: 'Sign up your account' },
-  { label: 'Verify your account' },
-  { label: 'Set up your workspace' },
-]
-
 const RegisterForm = () => {
+  const { t } = useTranslation('components')
   const [email, setEmail] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
+
+  const steps = [
+    { label: t('registerForm.steps.signUp') },
+    { label: t('registerForm.steps.verify') },
+    { label: t('registerForm.steps.setupWorkspace') },
+  ]
 
   const handleSubmit = async (event) => {
     event.preventDefault()
@@ -29,7 +31,7 @@ const RegisterForm = () => {
     setIsLoading(true)
 
     if (!email || !email.includes('@')) {
-      setError('Please enter a valid email address.')
+      setError(t('registerForm.invalidEmail'))
       setIsLoading(false)
       return
     }
@@ -50,10 +52,10 @@ const RegisterForm = () => {
       }}
     >
       <Typography variant="h5" sx={{ color: '#ffffff', fontWeight: 700, mb: 1 }}>
-        Get Start with Us
+        {t('registerForm.title')}
       </Typography>
       <Typography color="rgba(226, 232, 240, 0.9)" sx={{ mb: 4 }}>
-        Welcome to Pathsdata - let's create your account.
+        {t('registerForm.welcomeSubtitle')}
       </Typography>
 
       <StepIndicator steps={steps} activeStep={0} />
@@ -61,10 +63,10 @@ const RegisterForm = () => {
       <Box component="form" onSubmit={handleSubmit} sx={{ display: 'grid', gap: 3 }}>
         <Box>
           <Typography variant="subtitle1" sx={{ color: '#ffffff', mb: 1, fontWeight: 600 }}>
-            Sign up account
+            {t('registerForm.signUpAccount')}
           </Typography>
           <Typography color="rgba(148, 163, 184, 0.9)" sx={{ fontSize: 14, mb: 2 }}>
-            Reclaim control of your data with confidence. Secure, seamless, and built to empower you every step of the way.
+            {t('registerForm.description')}
           </Typography>
         </Box>
 
@@ -76,8 +78,8 @@ const RegisterForm = () => {
 
         <TextField
           fullWidth
-          label="Email"
-          placeholder="Please enter email"
+          label={t('registerForm.emailLabel')}
+          placeholder={t('registerForm.emailPlaceholder')}
           value={email}
           onChange={(event) => setEmail(event.target.value)}
           InputLabelProps={{ style: { color: 'rgba(226, 232, 240, 0.8)' } }}
@@ -118,20 +120,20 @@ const RegisterForm = () => {
           }}
           disabled={isLoading}
         >
-          {isLoading ? <CircularProgress size={20} color="inherit" /> : 'Continue'}
+          {isLoading ? <CircularProgress size={20} color="inherit" /> : t('registerForm.continue')}
         </Button>
 
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 1 }}>
           <Typography variant="body2" color="rgba(148, 163, 184, 0.9)">
-            Don't have an account?
+            {t('registerForm.noAccount')}
           </Typography>
           <Link href="#" underline="hover" sx={{ color: '#818cf8', fontWeight: 600 }}>
-            Sign Up
+            {t('registerForm.signUp')}
           </Link>
         </Box>
 
         <Link href="#" underline="hover" sx={{ color: '#94a3b8', textAlign: 'center', mt: 1 }}>
-          Book a Demo
+          {t('registerForm.bookDemo')}
         </Link>
       </Box>
     </Paper>

@@ -155,6 +155,14 @@ const [matchInfo, setMatchInfo] = useState(null)
 
   // Generated Script from Backend
   const [generatedScript, setGeneratedScript] = useState(null)
+  const [isGeneratingScript, setIsGeneratingScript] = useState(false)
+  const [scriptGenError, setScriptGenError] = useState(null)
+
+  // Report-analysis anomalies: unknown codes needing a reference file,
+  // and conflicts needing an update/ignore decision.
+  const [anomalies, setAnomalies] = useState([])
+  const [isSubmittingReferenceFile, setIsSubmittingReferenceFile] = useState(false)
+  const [isSubmittingDecision, setIsSubmittingDecision] = useState(false)
 
   // Conversational Chat State
   const [chatMessages, setChatMessages] = useState([])
@@ -163,6 +171,13 @@ const [matchInfo, setMatchInfo] = useState(null)
 const [pendingFile, setPendingFile] = useState(null)
   const [welcomeLoading, setWelcomeLoading] = useState(false)
   const [stepProgress, setStepProgress] = useState(null)
+
+  // Set once the AI has asked for a file/screenshot after several
+  // confused turns on the current step (see guided_engine.py). While
+  // true, an attached file is sent to /step-attachment rather than
+  // /reference-file, and images are accepted alongside documents.
+  const [awaitingAttachment, setAwaitingAttachment] = useState(false)
+  const [isSubmittingStepAttachment, setIsSubmittingStepAttachment] = useState(false)
 
   // Editing mode: correcting the answer of an already-completed step
   const [editStep, setEditStep] = useState(null) // { stepIndex, ruleName, value, previewHtml }
@@ -230,6 +245,7 @@ const fetchWelcome = async () => {
                   sender: 'ai',
                   text: data.welcome_message,
                   timestamp: new Date().toISOString(),
+                  _animate: true,
                 }]
             )
           } else {
@@ -238,6 +254,7 @@ const fetchWelcome = async () => {
               sender: 'ai',
               text: data.welcome_message,
               timestamp: new Date().toISOString(),
+              _animate: true,
             }])
           }
         } else {
@@ -245,6 +262,7 @@ const fetchWelcome = async () => {
             sender: 'ai',
             text: LOAD_ERROR_MESSAGE,
             timestamp: new Date().toISOString(),
+            _animate: true,
           }])
         }
       } catch (err) {
@@ -253,6 +271,7 @@ const fetchWelcome = async () => {
           sender: 'ai',
           text: err.isNetworkError ? NETWORK_ERROR_MESSAGE : LOAD_ERROR_MESSAGE,
           timestamp: new Date().toISOString(),
+          _animate: true,
         }])
       } finally {
         setWelcomeLoading(false)
@@ -265,6 +284,14 @@ const fetchWelcome = async () => {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [chatMessages])
+
+  // Keeps the composer's attachment routing correct across a page
+  // reload or the background poll, not just right after a chat reply.
+  useEffect(() => {
+    if (stepProgress && typeof stepProgress.awaiting_attachment === 'boolean') {
+      setAwaitingAttachment(stepProgress.awaiting_attachment)
+    }
+  }, [stepProgress])
 
   useEffect(() => {
     clearInterval(pollRef.current)
@@ -396,6 +423,7 @@ const uploadFile = async (file) => {
         setValidationErrors(data.validation_errors || [])
         setChatMessages(data.conversation || [])
         if (data.generated_script) setGeneratedScript(data.generated_script)
+        setAnomalies(data.anomalies || [])
         // Update stats
         updateStats(data.validation_errors || [])
       }
@@ -413,9 +441,154 @@ const uploadFile = async (file) => {
     setStats({ total, solved, remaining, progress })
   }
 
+  // A reference/production-extract file was attached via the paperclip
+  // button. Sends it straight to the anomaly it was requested for,
+  // rather than folding it into the free-text chat endpoints (which
+  // have no notion of file turns).
+  const submitReferenceFile = async () => {
+    if (!pendingFile || !requestId) return
+
+    const targetAnomaly = anomalies.find((a) => a.status === 'open' && a.kind === 'unknown_code')
+    if (!targetAnomaly) {
+      setPendingFile(null)
+      return
+    }
+
+    setIsSubmittingReferenceFile(true)
+    isChatLoadingRef.current = true
+
+    const formData = new FormData()
+    formData.append('file', pendingFile)
+    formData.append('linked_anomaly_id', targetAnomaly.id)
+
+    try {
+      const token = localStorage.getItem('brainopx_token')
+      const resp = await fetchWithThinkingTimeout(`${API_BASE}/api/requests/${requestId}/reference-file`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      })
+
+      if (resp.ok) {
+        const data = await resp.json()
+        setChatMessages(data.conversation || [])
+        fetchRequestState(requestId)
+      } else {
+        const errorData = await resp.json().catch(() => null)
+        throw new Error(errorData?.detail || 'Could not process the reference file.')
+      }
+    } catch (err) {
+      console.error('Reference file submission failed:', err)
+      const message = err.isNetworkError ? NETWORK_ERROR_MESSAGE : LOAD_ERROR_MESSAGE
+      setChatMessages((prev) => [
+        ...prev,
+        { sender: 'ai', text: message, timestamp: new Date().toISOString(), _animate: true },
+      ])
+    } finally {
+      setPendingFile(null)
+      setIsSubmittingReferenceFile(false)
+      isChatLoadingRef.current = false
+    }
+  }
+
+  // The file/screenshot the AI asked for after several confused turns
+  // on the current step. Never compared against anything — it only
+  // gives the AI more context for its next explanation.
+  const submitStepAttachment = async () => {
+    if (!pendingFile || !requestId) return
+
+    setIsSubmittingStepAttachment(true)
+    isChatLoadingRef.current = true
+
+    const formData = new FormData()
+    formData.append('file', pendingFile)
+
+    try {
+      const token = localStorage.getItem('brainopx_token')
+      const resp = await fetchWithThinkingTimeout(`${API_BASE}/api/requests/${requestId}/step-attachment`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      })
+
+      if (resp.ok) {
+        const data = await resp.json()
+        setChatMessages(data.conversation || [])
+        setAwaitingAttachment(false)
+        if (data.progress) setStepProgress(data.progress)
+      } else {
+        const errorData = await resp.json().catch(() => null)
+        throw new Error(errorData?.detail || 'Could not process that attachment.')
+      }
+    } catch (err) {
+      console.error('Step attachment submission failed:', err)
+      const message = err.isNetworkError ? NETWORK_ERROR_MESSAGE : LOAD_ERROR_MESSAGE
+      setChatMessages((prev) => [
+        ...prev,
+        { sender: 'ai', text: message, timestamp: new Date().toISOString(), _animate: true },
+      ])
+    } finally {
+      setPendingFile(null)
+      setIsSubmittingStepAttachment(false)
+      isChatLoadingRef.current = false
+    }
+  }
+
+  // Records an update/ignore decision for a conflict anomaly, posted
+  // from the decision buttons rendered in the chat.
+  const submitDecision = async (anomalyId, decision) => {
+    if (!requestId) return
+    setIsSubmittingDecision(true)
+    isChatLoadingRef.current = true
+
+    try {
+      const token = localStorage.getItem('brainopx_token')
+      const resp = await fetchWithThinkingTimeout(`${API_BASE}/api/requests/${requestId}/decision`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ anomaly_id: anomalyId, decision }),
+      })
+
+      if (resp.ok) {
+        const data = await resp.json()
+        setChatMessages(data.conversation || [])
+        fetchRequestState(requestId)
+      } else {
+        const errorData = await resp.json().catch(() => null)
+        throw new Error(errorData?.detail || 'Could not record that decision.')
+      }
+    } catch (err) {
+      console.error('Decision submission failed:', err)
+      const message = err.isNetworkError ? NETWORK_ERROR_MESSAGE : LOAD_ERROR_MESSAGE
+      setChatMessages((prev) => [
+        ...prev,
+        { sender: 'ai', text: message, timestamp: new Date().toISOString(), _animate: true },
+      ])
+    } finally {
+      setIsSubmittingDecision(false)
+      isChatLoadingRef.current = false
+    }
+  }
+
 const sendChatMessage = async (e) => {
     e.preventDefault()
     if (!chatInput.trim() && !pendingFile) return
+
+    // A reference file or a step attachment each take their own
+    // dedicated path — neither is a chat turn the existing step-chat/
+    // generic-chat endpoints understand. The AI's own attachment
+    // request takes priority: it's what the user is being asked for.
+    if (pendingFile) {
+      if (awaitingAttachment) {
+        await submitStepAttachment()
+      } else {
+        await submitReferenceFile()
+      }
+      return
+    }
 
     const messageText = chatInput.trim()
     setChatInput('')
@@ -476,6 +649,7 @@ const sendChatMessage = async (e) => {
               text: data.ai_response,
               passed: data.passed === true,
               timestamp: new Date().toISOString(),
+              _animate: true,
             }
           ]
         })
@@ -489,10 +663,18 @@ const sendChatMessage = async (e) => {
         if (data.progress) {
           setStepProgress(data.progress)
         }
-        
-        // If all steps completed, update request status
+
+        // The AI just asked for a file/screenshot after several
+        // confused turns on this step (or the user resolved/skipped
+        // that request) — reflect it so the composer knows whether an
+        // attached file should go to /step-attachment.
+        setAwaitingAttachment(Boolean(data.awaiting_attachment))
+
+        // Finishing the walkthrough completes the request outright
+        // (mirrors the backend, which now persists this directly
+        // instead of leaving it at 'data_validated').
         if (data.all_completed) {
-          setRequestStatus('data_validated')
+          setRequestStatus('processing_completed')
         }
         
         // Update stats from response
@@ -510,7 +692,7 @@ const sendChatMessage = async (e) => {
       const message = err.isNetworkError ? NETWORK_ERROR_MESSAGE : LOAD_ERROR_MESSAGE
       setChatMessages((prev) => [
         ...prev,
-        { sender: 'ai', text: message, timestamp: new Date().toISOString() }
+        { sender: 'ai', text: message, timestamp: new Date().toISOString(), _animate: true }
       ])
     } finally {
       setIsChatLoading(false)
@@ -653,13 +835,39 @@ const sendChatMessage = async (e) => {
 
   const downloadScript = () => {
     if (!generatedScript) return
-    const blob = new Blob([generatedScript], { type: 'text/plain' })
+    const blob = new Blob([generatedScript], { type: 'text/sql' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `brainopx_config_${requestId}.cfg`
+    a.download = `brainopx_config_${requestId}.sql`
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  // Manual retry for when the automatic generation (fired the moment
+  // the walkthrough completes) failed — e.g. a Groq rate limit — or
+  // the user just wants another attempt.
+  const regenerateScript = async () => {
+    if (!requestId || isGeneratingScript) return
+    setIsGeneratingScript(true)
+    setScriptGenError(null)
+    try {
+      const token = localStorage.getItem('brainopx_token')
+      const resp = await fetch(`${API_BASE}/api/requests/${requestId}/regenerate-workflow-script`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}))
+        throw new Error(body.detail || `Script generation failed (${resp.status}).`)
+      }
+      const data = await resp.json()
+      setGeneratedScript(data.generated_script || null)
+    } catch (err) {
+      setScriptGenError(err.message || 'Script generation failed.')
+    } finally {
+      setIsGeneratingScript(false)
+    }
   }
 
   const handleReset = () => {
@@ -699,6 +907,12 @@ const sendChatMessage = async (e) => {
   const openErrors = validationErrors.filter(e => e.status === 'open')
   const resolvedErrors = validationErrors.filter(e => e.status === 'solved')
 
+  const selectedTask = availableTasks.find((t) => t.id === selectedTaskId)
+  // The step-by-step "Rule Workflow Progress" bar only makes sense for
+  // skill_engine tasks (each rule is walked one at a time). report_analyses
+  // tasks are validated as a whole batch against the Excel template, so
+  // they surface progress through the validation report instead.
+  const isSkillEngineTask = selectedTask?.category === 'skill_engine'
   const hasActiveStepWorkflow = stepProgress && stepProgress.total_steps > 0 && !stepProgress.all_completed
   const lastChatMessage = chatMessages[chatMessages.length - 1]
   const secondLastChatMessage = chatMessages[chatMessages.length - 2]
@@ -824,8 +1038,8 @@ const sendChatMessage = async (e) => {
           ))}
         </Stepper>
 
-        {/* Step-by-Step Workflow Progress */}
-        {stepProgress && stepProgress.total_steps > 0 && (
+        {/* Step-by-Step Workflow Progress — Skill Engine tasks only */}
+        {isSkillEngineTask && stepProgress && stepProgress.total_steps > 0 && (
           <Box sx={{ mt: 2, pt: 2, borderTop: (theme) => `1px solid ${theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'}` }}>
             <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, textTransform: 'uppercase', mb: 1, display: 'block' }}>
               Rule Workflow Progress
@@ -1150,16 +1364,35 @@ const sendChatMessage = async (e) => {
                     <Typography variant="h6" sx={{ fontWeight: 700, fontFamily: "'Outfit', sans-serif", display: 'flex', alignItems: 'center', gap: 1 }}>
                       <CheckCircleIcon color="success" /> BRAINOPX Configuration Script
                     </Typography>
-                    <Button
-                      variant="contained"
-                      startIcon={<DownloadIcon />}
-                      color="success"
-                      onClick={downloadScript}
-                      sx={{ textTransform: 'none', borderRadius: 2 }}
-                    >
-                      Download Script
-                    </Button>
+                    <Stack direction="row" spacing={1}>
+                      <Tooltip title="Regenerate script">
+                        <span>
+                          <IconButton
+                            onClick={regenerateScript}
+                            disabled={isGeneratingScript}
+                            sx={{ border: '1px solid rgba(0,0,0,0.12)' }}
+                          >
+                            {isGeneratingScript ? <CircularProgress size={18} /> : <RefreshIcon fontSize="small" />}
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                      <Button
+                        variant="contained"
+                        startIcon={<DownloadIcon />}
+                        color="success"
+                        onClick={downloadScript}
+                        sx={{ textTransform: 'none', borderRadius: 2 }}
+                      >
+                        Download Script
+                      </Button>
+                    </Stack>
                   </Stack>
+
+                  {scriptGenError && (
+                    <Alert severity="warning" sx={{ mb: 1.5, borderRadius: 2 }} onClose={() => setScriptGenError(null)}>
+                      {scriptGenError}
+                    </Alert>
+                  )}
 
                   <Paper
                     variant="outlined"
@@ -1180,6 +1413,32 @@ const sendChatMessage = async (e) => {
                   >
                     {generatedScript}
                   </Paper>
+                </Paper>
+              </Fade>
+            )}
+
+            {isCompleted && !generatedScript && (
+              <Fade in>
+                <Paper sx={{ p: 2.5, borderRadius: 3, border: '1px dashed rgba(0,0,0,0.2)' }}>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={2}>
+                    <Box>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+                        No script yet
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {scriptGenError || 'Script generation did not run or failed for this task.'}
+                      </Typography>
+                    </Box>
+                    <Button
+                      variant="outlined"
+                      startIcon={isGeneratingScript ? <CircularProgress size={16} /> : <RefreshIcon />}
+                      onClick={regenerateScript}
+                      disabled={isGeneratingScript}
+                      sx={{ textTransform: 'none', borderRadius: 2, whiteSpace: 'nowrap' }}
+                    >
+                      Generate Script
+                    </Button>
+                  </Stack>
                 </Paper>
               </Fade>
             )}
@@ -1277,9 +1536,47 @@ const sendChatMessage = async (e) => {
                     validated={msg.validated}
                     html={msg.sender === 'ai'}
                     user={user}
+                    animate={Boolean(msg._animate)}
                   />
                 ))
               )}
+
+              {/* Conflicts found between the upload and a reference file:
+                  each needs an explicit update-vs-ignore decision before
+                  the request can move on. */}
+              {anomalies.filter((a) => a.status === 'open' && a.kind === 'conflict').map((a) => (
+                <Paper
+                  key={a.id}
+                  variant="outlined"
+                  sx={{ p: 2, borderRadius: 2, borderColor: 'warning.main', bgcolor: 'rgba(237,108,2,0.06)' }}
+                >
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
+                    Conflict on row {a.row}, column "{a.column}"
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1.5 }}>
+                    Code "{a.code}" differs from the reference file. Update the existing record, or ignore this row?
+                  </Typography>
+                  <Stack direction="row" spacing={1}>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      color="warning"
+                      disabled={isSubmittingDecision}
+                      onClick={() => submitDecision(a.id, 'update')}
+                    >
+                      Update existing
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={isSubmittingDecision}
+                      onClick={() => submitDecision(a.id, 'ignore')}
+                    >
+                      Ignore
+                    </Button>
+                  </Stack>
+                </Paper>
+              ))}
 
               {/* Task just selected/launched — the welcome message is
                   still in flight, so the assistant shows as thinking
@@ -1349,9 +1646,13 @@ const sendChatMessage = async (e) => {
                 alignItems: 'center',
                 gap: 1
               }}>
-                <AttachFileIcon fontSize="small" color="primary" />
-                <Typography variant="caption" sx={{ flex: 1 }}>{pendingFile.name}</Typography>
-<IconButton size="small" onClick={() => setPendingFile(null)}>
+                {(isSubmittingReferenceFile || isSubmittingStepAttachment)
+                  ? <CircularProgress size={16} />
+                  : <AttachFileIcon fontSize="small" color="primary" />}
+                <Typography variant="caption" sx={{ flex: 1 }}>
+                  {(isSubmittingReferenceFile || isSubmittingStepAttachment) ? `Uploading ${pendingFile.name}…` : pendingFile.name}
+                </Typography>
+                <IconButton size="small" onClick={() => setPendingFile(null)} disabled={isSubmittingReferenceFile || isSubmittingStepAttachment}>
                   <Typography variant="caption">×</Typography>
                 </IconButton>
               </Box>
@@ -1380,7 +1681,11 @@ const sendChatMessage = async (e) => {
                 ref={chatFileInputRef}
                 type="file"
                 style={{ display: 'none' }}
-                accept=".xlsx,.xls,.csv,.txt"
+                accept={
+                  awaitingAttachment
+                    ? '.xlsx,.xls,.csv,.txt,.pdf,.docx,.doc,.png,.jpg,.jpeg,.webp'
+                    : '.xlsx,.xls,.csv,.txt'
+                }
                 onChange={(e) => setPendingFile(e.target.files?.[0] || null)}
               />
 
@@ -1438,13 +1743,17 @@ const sendChatMessage = async (e) => {
                     mt: 0.5,
                   }}
                 >
-                  <Tooltip title="Attach complementary file (e.g. production extract)">
+                  <Tooltip title={
+                    awaitingAttachment
+                      ? 'Attach a file or screenshot to help explain'
+                      : 'Attach complementary file (e.g. production extract)'
+                  }>
                     <span>
                       <IconButton
                         size="small"
                         onClick={() => chatFileInputRef.current?.click()}
-                        disabled={requestStatus === 'draft' || isCompleted}
-                        sx={{ color: 'text.secondary' }}
+                        disabled={requestStatus === 'draft' || isCompleted || isSubmittingReferenceFile || isSubmittingStepAttachment}
+                        sx={{ color: awaitingAttachment ? '#4f46e5' : 'text.secondary' }}
                       >
                         <AttachFileIcon sx={{ fontSize: 18 }} />
                       </IconButton>
@@ -1453,7 +1762,7 @@ const sendChatMessage = async (e) => {
 
                   <IconButton
                     type="submit"
-                    disabled={(!chatInput.trim() && !pendingFile) || isChatLoading || requestStatus === 'draft' || isCompleted}
+                    disabled={(!chatInput.trim() && !pendingFile) || isChatLoading || isSubmittingReferenceFile || isSubmittingStepAttachment || requestStatus === 'draft' || isCompleted}
                     sx={{
                       bgcolor: '#4f46e5',
                       color: '#fff',

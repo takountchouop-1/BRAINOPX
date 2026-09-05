@@ -3,6 +3,7 @@ import { Box, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Toolti
 import { alpha } from '@mui/material/styles'
 import { motion } from 'framer-motion'
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import DashboardIconImport from '@mui/icons-material/Dashboard'
 import AssignmentIconImport from '@mui/icons-material/Assignment'
 import CheckCircleIconImport from '@mui/icons-material/CheckCircle'
@@ -13,6 +14,7 @@ import LogoutIconImport from '@mui/icons-material/Logout'
 import agentIcon from '../assets/agent.jpg'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useDashboardCustomizer } from '../context/DashboardCustomizerContext.jsx'
+import LanguageSwitcher from '../components/LanguageSwitcher.jsx'
 
 const DashboardIcon = DashboardIconImport?.default || DashboardIconImport
 const AssignmentIcon = AssignmentIconImport?.default || AssignmentIconImport
@@ -27,32 +29,36 @@ const LogoutIcon = LogoutIconImport?.default || LogoutIconImport
 // customizer.
 const DEFAULT_ACCENT = '#3b66ff'
 
-const menuItems = [
-  { text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
-  { text: 'Request', icon: <AssignmentIcon />, path: '/dashboard/request' },
-  { text: 'Task Management', icon: <CheckCircleIcon />, path: '/dashboard/tasks' },
-  {
-    text: 'General assistant',
-    icon: (
-      <Box
-        component="img"
-        src={agentIcon}
-        alt=""
-        sx={{ width: 24, height: 24, borderRadius: '50%', objectFit: 'cover' }}
-      />
-    ),
-    path: '/dashboard/ai-assistant',
-  },
-  { text: 'User Management', icon: <PeopleIcon />, path: '/dashboard/users' },
-  { text: 'Rule Engine', icon: <SettingsIcon />, path: '/dashboard/rules' },
-  { text: 'Profile', icon: <PersonIcon />, path: '/profile' },
-]
-
 const Sidebar = ({ collapsed = false }) => {
   const navigate = useNavigate()
   const location = useLocation()
-  const { logout } = useAuth()
+  const { logout, user } = useAuth()
   const { settings } = useDashboardCustomizer()
+  const { t } = useTranslation('layout')
+  const isAdmin = user?.role === 'admin'
+
+  const menuItems = [
+    { text: t('sidebar.menu.dashboard'), icon: <DashboardIcon />, path: '/dashboard' },
+    { text: t('sidebar.menu.request'), icon: <AssignmentIcon />, path: '/dashboard/request' },
+    { text: t('sidebar.menu.taskManagement'), icon: <CheckCircleIcon />, path: '/dashboard/tasks' },
+    {
+      text: t('sidebar.menu.generalAssistant'),
+      icon: (
+        <Box
+          component="img"
+          src={agentIcon}
+          alt=""
+          sx={{ width: 24, height: 24, borderRadius: '50%', objectFit: 'cover' }}
+        />
+      ),
+      path: '/dashboard/ai-assistant',
+    },
+    { text: t('sidebar.menu.userManagement'), icon: <PeopleIcon />, path: '/dashboard/users', adminOnly: true },
+    { text: t('sidebar.menu.ruleEngine'), icon: <SettingsIcon />, path: '/dashboard/rules' },
+    { text: t('sidebar.menu.profile'), icon: <PersonIcon />, path: '/profile' },
+  ]
+
+  const visibleMenuItems = menuItems.filter((item) => !item.adminOnly || isAdmin)
 
   const handleLogout = () => {
     logout()
@@ -110,12 +116,12 @@ const Sidebar = ({ collapsed = false }) => {
             color: '#ffffff',
           }}
         >
-          {collapsed ? 'IA' : 'Brain OPX'}
+          {collapsed ? t('sidebar.brand.short') : t('sidebar.brand.full')}
         </Typography>
       </Box>
 
       <List sx={{ flex: 1, px: collapsed ? 1 : 2, py: 2 }}>
-        {menuItems.map((item) => {
+        {visibleMenuItems.map((item) => {
           // Nested routes (e.g. a future /dashboard/tasks/123) still
           // light up their parent item; "/dashboard" itself is only
           // active on an exact match, or the whole menu would light
@@ -191,10 +197,15 @@ const Sidebar = ({ collapsed = false }) => {
         })}
       </List>
 
+      {/* Language switcher, sitting just above logout. */}
+      <Box sx={{ px: collapsed ? 1 : 2, pt: 1 }}>
+        <LanguageSwitcher collapsed={collapsed} />
+      </Box>
+
       {/* Logout — a filled pill, matching the accent rather than the
           left-aligned list rows above it. */}
       <Box sx={{ px: collapsed ? 1 : 2, pb: 2.5, pt: 1 }}>
-        <Tooltip title={collapsed ? 'Logout' : ''} placement="right">
+        <Tooltip title={collapsed ? t('sidebar.logout') : ''} placement="right">
           <Box
             component="button"
             type="button"
@@ -228,7 +239,7 @@ const Sidebar = ({ collapsed = false }) => {
             }}
           >
             <LogoutIcon sx={{ fontSize: 19 }} />
-            {!collapsed && 'LOGOUT'}
+            {!collapsed && t('sidebar.logoutButton')}
           </Box>
         </Tooltip>
       </Box>

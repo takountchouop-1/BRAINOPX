@@ -5,14 +5,13 @@ from openai import OpenAI
 load_dotenv()
 
 client = OpenAI(
-    api_key=os.getenv("GROQ_API_KEY"),
-    base_url="https://api.groq.com/openai/v1",
+    api_key=os.getenv("DEEPSEEK_API_KEY"),
+    base_url="https://api.deepseek.com",
 )
 
-print("🔍 Testing Groq API...")
+print("🔍 Testing DeepSeek API...")
 
-# Use one of the available models
-model_name = "openai/gpt-oss-120b"  # Available from your list
+model_name = "deepseek-chat"
 
 try:
     response = client.chat.completions.create(
@@ -23,10 +22,9 @@ try:
         ],
         temperature=0.3,
         max_tokens=300,
-        reasoning_effort="low",
     )
-    
-    print(f"✅ Groq ({model_name}) says:", response.choices[0].message.content)
-    
+
+    print(f"✅ DeepSeek ({model_name}) says:", response.choices[0].message.content)
+
 except Exception as e:
     print(f"❌ Error: {e}")

@@ -1,4 +1,6 @@
 import React, { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import {
   Alert,
   Box,
@@ -21,9 +23,13 @@ import PersonOutlineIconImport from '@mui/icons-material/PersonOutline'
 import VisibilityIconImport from '@mui/icons-material/Visibility'
 import VisibilityOffIconImport from '@mui/icons-material/VisibilityOff'
 import AppleIconImport from '@mui/icons-material/Apple'
+import ArrowBackIconImport from '@mui/icons-material/ArrowBack'
+import InstagramIconImport from '@mui/icons-material/Instagram'
+import YouTubeIconImport from '@mui/icons-material/YouTube'
+import LinkedInIconImport from '@mui/icons-material/LinkedIn'
 import { GoogleGlyph, FacebookGlyph } from '../components/authentication/SocialIcons.jsx'
+import LanguageSwitcher from '../components/LanguageSwitcher.jsx'
 import {
-  AUTH_PAGE_BG,
   AUTH_HERO_BG,
   AUTH_TITLE_GRADIENT,
   AUTH_CARD_RADIUS,
@@ -34,6 +40,8 @@ import {
   authButtonStyles,
   authSocialCircleStyles,
 } from '../components/authentication/authStyles.js'
+import { FloatingCard, BarChartMock, PieChartMock, IconChip, AuthPageBackdrop } from '../components/authentication/AuthDecorations.jsx'
+import { useAuth } from '../context/AuthContext.jsx'
 
 const EmailOutlinedIcon = EmailOutlinedIconImport?.default || EmailOutlinedIconImport
 const LockOutlinedIcon = LockOutlinedIconImport?.default || LockOutlinedIconImport
@@ -41,8 +49,17 @@ const PersonOutlineIcon = PersonOutlineIconImport?.default || PersonOutlineIconI
 const VisibilityIcon = VisibilityIconImport?.default || VisibilityIconImport
 const VisibilityOffIcon = VisibilityOffIconImport?.default || VisibilityOffIconImport
 const AppleIcon = AppleIconImport?.default || AppleIconImport
+const ArrowBackIcon = ArrowBackIconImport?.default || ArrowBackIconImport
+const InstagramIcon = InstagramIconImport?.default || InstagramIconImport
+const YouTubeIcon = YouTubeIconImport?.default || YouTubeIconImport
+const LinkedInIcon = LinkedInIconImport?.default || LinkedInIconImport
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 const Register = () => {
+  const { t } = useTranslation('pages')
+  const navigate = useNavigate()
+  const { login } = useAuth()
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -60,16 +77,20 @@ const Register = () => {
 
   const validateEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 
+  const handleGoogleSignIn = () => {
+    window.location.href = `${API_BASE_URL}/api/auth/google/login`
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError('')
     setStatus('')
 
-    const fErr = !fullName.trim() ? 'Full name is required.' : ''
-    const eErr = !email.trim() ? 'Email is required.' : !validateEmail(email) ? 'Enter a valid email.' : ''
-    const pErr = !password ? 'Password is required.' : password.length < 8 ? 'Password must be at least 8 characters.' : ''
-    const cErr = !confirmPassword ? 'Please confirm your password.' : password !== confirmPassword ? 'Passwords do not match.' : ''
-    const aErr = !agree ? 'You must agree to the terms and privacy policy.' : ''
+    const fErr = !fullName.trim() ? t('register.errorFullNameRequired') : ''
+    const eErr = !email.trim() ? t('register.errorEmailRequired') : !validateEmail(email) ? t('register.errorEmailInvalid') : ''
+    const pErr = !password ? t('register.errorPasswordRequired') : password.length < 8 ? t('register.errorPasswordTooShort') : ''
+    const cErr = !confirmPassword ? t('register.errorConfirmPasswordRequired') : password !== confirmPassword ? t('register.errorPasswordsMismatch') : ''
+    const aErr = !agree ? t('register.errorAgreeRequired') : ''
 
     setFullNameError(fErr)
     setEmailError(eErr)
@@ -94,16 +115,23 @@ const Register = () => {
         const detailMessage = Array.isArray(payload?.detail)
           ? payload.detail.map((d) => d.msg).join(', ')
           : payload?.detail
-        throw new Error(detailMessage || 'Registration failed.')
+        throw new Error(detailMessage || t('register.errorRegistrationFailedDefault'))
       }
-      setStatus('Account created successfully. You can now sign in.')
-      setFullName('')
-      setEmail('')
-      setPassword('')
-      setConfirmPassword('')
-      setAgree(false)
+      setStatus(t('register.statusAccountCreated'))
+
+      // Sign the freshly-created account in right away so the success
+      // page's "Next" button can drop the user straight into the
+      // dashboard instead of bouncing them to /login.
+      try {
+        await login({ email, password })
+      } catch {
+        // If auto sign-in fails for any reason, the success page's
+        // "Next" button will simply send them to /login instead.
+      }
+
+      navigate('/register/success', { state: { fullName } })
     } catch (err) {
-      setError(err?.message || 'Unable to register. Try again later.')
+      setError(err?.message || t('register.errorRegisterFailedDefault'))
     } finally {
       setIsLoading(false)
     }
@@ -114,50 +142,93 @@ const Register = () => {
       component="main"
       sx={{
         minHeight: '100vh',
-        background: AUTH_PAGE_BG,
+        background: 'linear-gradient(180deg, #050915 0%, #0a1230 45%, #060a1c 100%)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         px: 2,
         py: 3,
+        position: 'relative',
+        overflow: 'hidden',
       }}
     >
+      <AuthPageBackdrop />
+      <Button
+        onClick={() => navigate('/landing')}
+        startIcon={<ArrowBackIcon />}
+        sx={{
+          position: 'absolute',
+          zIndex: 1,
+          top: { xs: 12, md: 24 },
+          left: { xs: 12, md: 24 },
+          textTransform: 'none',
+          fontWeight: 600,
+          color: '#e2e8f0',
+          '&:hover': { backgroundColor: 'rgba(255,255,255,0.08)' },
+        }}
+      >
+        {t('register.backToHome')}
+      </Button>
+      <Box
+        sx={{
+          position: 'absolute',
+          zIndex: 1,
+          top: { xs: 12, md: 24 },
+          right: { xs: 12, md: 24 },
+        }}
+      >
+        <LanguageSwitcher variant="label" />
+      </Box>
       <Paper
         elevation={10}
         sx={{
+          position: 'relative',
+          zIndex: 1,
           width: '100%',
-          maxWidth: 900,
+          maxWidth: 960,
           borderRadius: AUTH_CARD_RADIUS,
           overflow: 'hidden',
           boxShadow: AUTH_CARD_SHADOW,
           background: '#ffffff'
         }}
       >
-         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1.05fr' }, minHeight: { xs: 'auto', md: 370 } }}>
-          <Box sx={{ position: 'relative', background: AUTH_HERO_BG, color: '#ffffff', px: { xs: 3.5, md: 4 }, py: { xs: 3, md: 4 }, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', overflow: 'hidden' }}>
+         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1.05fr' }, minHeight: { xs: 'auto', md: 400 } }}>
+          <Box sx={{ position: 'relative', background: AUTH_HERO_BG, color: '#ffffff', px: { xs: 4, md: 4.5 }, py: { xs: 3.5, md: 4.5 }, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', overflow: 'hidden' }}>
+            <Box sx={{ position: 'absolute', bottom: -20, left: -20, width: 160, height: 160, borderRadius: '50%', background: 'radial-gradient(circle, rgba(59,102,255,0.28), transparent 70%)', filter: 'blur(4px)' }} />
+
+            <FloatingCard top="3%" right="8%" duration={5.5} delay={0.5} rotateFrom={10} rotateTo={-6}>
+              <IconChip icon={<InstagramIcon fontSize="small" />} color="#e1306c" />
+            </FloatingCard>
+            <FloatingCard top="36%" right="3%" duration={7} delay={1.1} rotateFrom={-10} rotateTo={8}>
+              <IconChip icon={<YouTubeIcon fontSize="small" />} color="#ff4d4d" />
+            </FloatingCard>
+            <FloatingCard bottom="30%" right="8%" duration={6} delay={0.3} rotateFrom={6} rotateTo={-8}>
+              <IconChip icon={<LinkedInIcon fontSize="small" />} color="#5b9bff" />
+            </FloatingCard>
+            <FloatingCard bottom="8%" left="6%" duration={6.5} rotateFrom={-6} rotateTo={5}>
+              <BarChartMock />
+            </FloatingCard>
+            <FloatingCard bottom="6%" right="16%" duration={7.5} delay={0.8} rotateFrom={-5} rotateTo={7}>
+              <PieChartMock />
+            </FloatingCard>
+
             <Box sx={{ zIndex: 1 }}>
               <motion.div initial={{ y: -24, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ duration: 0.75, ease: 'easeOut' }}>
                 <Typography sx={{ fontWeight: 800, fontSize: { xs: 22, md: 25 }, lineHeight: 1.15, mb: 1.25, ...AUTH_TITLE_GRADIENT }}>
-                  CREATE YOUR ACCOUNT
+                  {t('register.heroTitle')}
                 </Typography>
               </motion.div>
             </Box>
-
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, mt: 2.25, zIndex: 1 }}>
-              <Box sx={{ width: 44, height: 44, borderRadius: 3, bgcolor: 'rgba(255,255,255,0.12)' }} />
-              <Box sx={{ width: 30, height: 30, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.18)' }} />
-              <Box sx={{ width: 60, height: 60, borderRadius: '50%', bgcolor: 'rgba(255,255,255,0.08)' }} />
-            </Box>
           </Box>
 
-          <Box sx={{ background: '#ffffff', px: { xs: 3.5, md: 4 }, py: { xs: 3, md: 4 }, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Box sx={{ background: '#ffffff', px: { xs: 4, md: 6 }, py: { xs: 3.5, md: 4.5 }, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Box sx={{ width: '100%', maxWidth: 360 }}>
               <Box sx={{ display: 'flex', justifyContent: 'center', mb: 2.25 }}>
                 <Box sx={{ width: 48, height: 48, borderRadius: 3, background: '#eef4ff', display: 'grid', placeItems: 'center', color: '#3b66ff', fontWeight: 700, fontSize: 19 }}>A</Box>
               </Box>
 
-              <Typography variant="h5" align="center" sx={{ fontWeight: 700, mb: 0.6, color: '#1e293b' }}>Welcome</Typography>
-              <Typography variant="body2" align="center" sx={{ mb: 2.5, color: '#64748b' }}>Create an account to get started.</Typography>
+              <Typography variant="h5" align="center" sx={{ fontWeight: 700, mb: 0.6, color: '#1e293b' }}>{t('register.welcome')}</Typography>
+              <Typography variant="body2" align="center" sx={{ mb: 2.5, color: '#64748b' }}>{t('register.subtitle')}</Typography>
 
               <Stack component="form" spacing={2} onSubmit={handleSubmit} noValidate>
                 {error ? <Alert severity="error">{error}</Alert> : null}
@@ -166,17 +237,17 @@ const Register = () => {
                 <TextField
                   fullWidth
                   required
-                  label="Full Name"
-                  placeholder="Enter your full name"
+                  label={t('register.fullNameLabel')}
+                  placeholder={t('register.fullNamePlaceholder')}
                   name="fullName"
                   value={fullName}
                   onChange={(e) => {
                     setFullName(e.target.value)
-                    if (!e.target.value.trim()) setFullNameError('Full name is required.')
+                    if (!e.target.value.trim()) setFullNameError(t('register.errorFullNameRequired'))
                     else setFullNameError('')
                   }}
                   onBlur={() => {
-                    if (!fullName.trim()) setFullNameError('Full name is required.')
+                    if (!fullName.trim()) setFullNameError(t('register.errorFullNameRequired'))
                   }}
                   autoComplete="name"
                   InputProps={{ startAdornment: (<InputAdornment position="start" sx={{ color: '#64748b' }}><PersonOutlineIcon fontSize="small" /></InputAdornment>) }}
@@ -188,19 +259,19 @@ const Register = () => {
                 <TextField
                   fullWidth
                   required
-                  label="Email"
-                  placeholder="Enter your email address"
+                  label={t('register.emailLabel')}
+                  placeholder={t('register.emailPlaceholder')}
                   name="email"
                   type="email"
                   value={email}
                   onChange={(e) => {
                     setEmail(e.target.value)
-                    if (!e.target.value.trim()) setEmailError('Email is required.')
-                    else if (!validateEmail(e.target.value)) setEmailError('Enter a valid email.')
+                    if (!e.target.value.trim()) setEmailError(t('register.errorEmailRequired'))
+                    else if (!validateEmail(e.target.value)) setEmailError(t('register.errorEmailInvalid'))
                     else setEmailError('')
                   }}
                   onBlur={() => {
-                    if (!email.trim()) setEmailError('Email is required.')
+                    if (!email.trim()) setEmailError(t('register.errorEmailRequired'))
                   }}
                   autoComplete="email"
                   InputProps={{ startAdornment: (<InputAdornment position="start" sx={{ color: '#64748b' }}><EmailOutlinedIcon fontSize="small" /></InputAdornment>) }}
@@ -212,21 +283,21 @@ const Register = () => {
                 <TextField
                   fullWidth
                   required
-                  label="Password"
-                  placeholder="Create a password"
+                  label={t('register.passwordLabel')}
+                  placeholder={t('register.passwordPlaceholder')}
                   name="password"
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => {
                     setPassword(e.target.value)
-                    if (!e.target.value) setPasswordError('Password is required.')
-                    else if (e.target.value.length < 8) setPasswordError('Password must be at least 8 characters.')
+                    if (!e.target.value) setPasswordError(t('register.errorPasswordRequired'))
+                    else if (e.target.value.length < 8) setPasswordError(t('register.errorPasswordTooShort'))
                     else setPasswordError('')
-                    if (confirmPassword && e.target.value !== confirmPassword) setConfirmPasswordError('Passwords do not match.')
+                    if (confirmPassword && e.target.value !== confirmPassword) setConfirmPasswordError(t('register.errorPasswordsMismatch'))
                     else if (confirmPassword) setConfirmPasswordError('')
                   }}
                   autoComplete="new-password"
-                  InputProps={{ startAdornment: (<InputAdornment position="start" sx={{ color: '#64748b' }}><LockOutlinedIcon fontSize="small" /></InputAdornment>), endAdornment: (<InputAdornment position="end"><IconButton edge="end" aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword((s) => !s)} onMouseDown={(e) => e.preventDefault()} sx={{ color: '#64748b' }}>{showPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}</IconButton></InputAdornment>) }}
+                  InputProps={{ startAdornment: (<InputAdornment position="start" sx={{ color: '#64748b' }}><LockOutlinedIcon fontSize="small" /></InputAdornment>), endAdornment: (<InputAdornment position="end"><IconButton edge="end" aria-label={showPassword ? t('register.hidePassword') : t('register.showPassword')} onClick={() => setShowPassword((s) => !s)} onMouseDown={(e) => e.preventDefault()} sx={{ color: '#64748b' }}>{showPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}</IconButton></InputAdornment>) }}
                   error={!!passwordError}
                   helperText={passwordError}
                   sx={authInputStyles}
@@ -235,15 +306,15 @@ const Register = () => {
                 <TextField
                   fullWidth
                   required
-                  label="Confirm Password"
-                  placeholder="Re-enter your password"
+                  label={t('register.confirmPasswordLabel')}
+                  placeholder={t('register.confirmPasswordPlaceholder')}
                   name="confirmPassword"
                   type={showPassword ? 'text' : 'password'}
                   value={confirmPassword}
                   onChange={(e) => {
                     setConfirmPassword(e.target.value)
-                    if (!e.target.value) setConfirmPasswordError('Please confirm your password.')
-                    else if (password !== e.target.value) setConfirmPasswordError('Passwords do not match.')
+                    if (!e.target.value) setConfirmPasswordError(t('register.errorConfirmPasswordRequired'))
+                    else if (password !== e.target.value) setConfirmPasswordError(t('register.errorPasswordsMismatch'))
                     else setConfirmPasswordError('')
                   }}
                   autoComplete="new-password"
@@ -255,28 +326,28 @@ const Register = () => {
 
                 <FormControlLabel 
                   control={<Checkbox checked={agree} onChange={(e) => { setAgree(e.target.checked); if (e.target.checked) setAgreeError('') }} sx={authCheckboxStyles} />} 
-                  label={<Typography variant="body2" sx={{ color: '#475569' }}>I agree to the <Link href="#" underline="hover" sx={authLinkStyles}>Terms</Link> and <Link href="#" underline="hover" sx={authLinkStyles}>Privacy Policy</Link>.</Typography>} 
+                  label={<Typography variant="body2" sx={{ color: '#475569' }}>{t('register.agreePrefix')} <Link href="#" underline="hover" sx={authLinkStyles}>{t('register.termsLink')}</Link> {t('register.agreeAnd')} <Link href="#" underline="hover" sx={authLinkStyles}>{t('register.privacyLink')}</Link>.</Typography>}
                   sx={{ ml: -1 }} 
                 />
                 {agreeError ? <Typography variant="caption" color="error" sx={{ display: 'block', ml: 1 }}>{agreeError}</Typography> : null}
 
-                 <Button type="submit" fullWidth variant="contained" sx={{ ...authButtonStyles, py: 1.15 }} disabled={isLoading}>{isLoading ? 'Creating account...' : 'Create account'}</Button>
+                 <Button type="submit" fullWidth variant="contained" sx={{ ...authButtonStyles, py: 1.15 }} disabled={isLoading}>{isLoading ? t('register.creatingAccount') : t('register.createAccount')}</Button>
 
-                 <Divider sx={{ my: 0.75, '&::before, &::after': { borderColor: '#cbd5e1' }, color: '#64748b' }}>or</Divider>
+                 <Divider sx={{ my: 0.75, '&::before, &::after': { borderColor: '#cbd5e1' }, color: '#64748b' }}>{t('register.or')}</Divider>
 
                  <Stack direction="row" spacing={2} justifyContent="center">
-                  <IconButton aria-label="Continue with Google" sx={authSocialCircleStyles}>
+                  <IconButton aria-label={t('register.continueWithGoogle')} onClick={handleGoogleSignIn} sx={authSocialCircleStyles}>
                     <GoogleGlyph size={20} />
                   </IconButton>
-                  <IconButton aria-label="Continue with Facebook" sx={authSocialCircleStyles}>
+                  <IconButton aria-label={t('register.continueWithFacebook')} sx={authSocialCircleStyles}>
                     <FacebookGlyph size={20} />
                   </IconButton>
-                  <IconButton aria-label="Continue with Apple" sx={authSocialCircleStyles}>
+                  <IconButton aria-label={t('register.continueWithApple')} sx={authSocialCircleStyles}>
                     <AppleIcon sx={{ color: '#1e293b' }} />
                   </IconButton>
                 </Stack>
 
-                 <Typography align="center" sx={{ color: '#64748b', mt: 0.5 }}>Already have an account? <Link href="/login" underline="hover" sx={authLinkStyles}>Sign in</Link></Typography>
+                 <Typography align="center" sx={{ color: '#64748b', mt: 0.5 }}>{t('register.alreadyHaveAccount')} <Link href="/login" underline="hover" sx={authLinkStyles}>{t('register.signIn')}</Link></Typography>
               </Stack>
             </Box>
           </Box>

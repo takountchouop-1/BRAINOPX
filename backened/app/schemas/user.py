@@ -20,6 +20,7 @@ class UserUpdate(BaseModel):
     """What the client sends when updating their profile."""
     full_name: Optional[str] = Field(None, min_length=2, max_length=150)
     email: Optional[EmailStr] = None
+    language: Optional[str] = None
 
 
 class UserResponse(BaseModel):
@@ -38,6 +39,7 @@ class UserResponse(BaseModel):
     profile_picture: Optional[str] = None
     is_active: bool
     role: str = "member"
+    language: str = "en"
 
     class Config:
         from_attributes = True

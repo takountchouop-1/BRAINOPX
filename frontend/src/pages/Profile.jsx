@@ -12,6 +12,7 @@ import {
   Divider,
   TextField,
 } from '@mui/material'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '../context/AuthContext.jsx'
 import PhotoCameraIconImport from '@mui/icons-material/PhotoCamera'
 import DeleteIconImport from '@mui/icons-material/Delete'
@@ -24,6 +25,7 @@ const SaveIcon = SaveIconImport?.default || SaveIconImport
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 const Profile = () => {
+  const { t } = useTranslation('pages')
   const { user, token, updateUser } = useAuth()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -44,13 +46,13 @@ const Profile = () => {
     // Validate file type
     const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
     if (!allowedTypes.includes(file.type)) {
-      setError('Please select a valid image file (jpg, png, gif, webp)')
+      setError(t('profile.errorInvalidImageType'))
       return
     }
 
     // Validate file size (5MB)
     if (file.size > 5 * 1024 * 1024) {
-      setError('File size must be less than 5MB')
+      setError(t('profile.errorFileTooLarge'))
       return
     }
 
@@ -72,17 +74,17 @@ const Profile = () => {
 
       if (!response.ok) {
         const errorData = await response.json()
-        throw new Error(errorData.detail || 'Upload failed')
+        throw new Error(errorData.detail || t('profile.errorUploadFailed'))
       }
 
       const data = await response.json()
       setProfilePicture(data.profile_picture)
       // Sync to AuthContext so Topbar updates immediately
       updateUser({ profile_picture: data.profile_picture })
-      setSuccess('Profile picture uploaded successfully!')
+      setSuccess(t('profile.successUploaded'))
 
     } catch (err) {
-      setError(err.message || 'Failed to upload profile picture')
+      setError(err.message || t('profile.errorUploadFailedGeneric'))
     } finally {
       setLoading(false)
     }
@@ -105,16 +107,16 @@ const Profile = () => {
 
       if (!response.ok) {
         const errorData = await response.json()
-        throw new Error(errorData.detail || 'Delete failed')
+        throw new Error(errorData.detail || t('profile.errorDeleteFailed'))
       }
 
       setProfilePicture(null)
       // Sync to AuthContext so Topbar updates immediately
       updateUser({ profile_picture: null })
-      setSuccess('Profile picture deleted successfully!')
+      setSuccess(t('profile.successDeleted'))
 
     } catch (err) {
-      setError(err.message || 'Failed to delete profile picture')
+      setError(err.message || t('profile.errorDeleteFailedGeneric'))
     } finally {
       setLoading(false)
     }
@@ -126,11 +128,11 @@ const Profile = () => {
 
     // Basic validation
     if (!fullName.trim() || fullName.trim().length < 2) {
-      setError('Full name must be at least 2 characters')
+      setError(t('profile.errorFullNameTooShort'))
       return
     }
     if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setError('Please enter a valid email address')
+      setError(t('profile.errorInvalidEmail'))
       return
     }
 
@@ -150,7 +152,7 @@ const Profile = () => {
 
       if (!response.ok) {
         const errorData = await response.json()
-        throw new Error(errorData.detail || 'Failed to update profile')
+        throw new Error(errorData.detail || t('profile.errorUpdateFailed'))
       }
 
       const updatedUser = await response.json()
@@ -159,10 +161,10 @@ const Profile = () => {
         full_name: updatedUser.full_name,
         email: updatedUser.email,
       })
-      setSuccess('Profile updated successfully!')
+      setSuccess(t('profile.successUpdated'))
 
     } catch (err) {
-      setError(err.message || 'Failed to update profile')
+      setError(err.message || t('profile.errorUpdateFailedGeneric'))
     } finally {
       setLoading(false)
     }
@@ -172,12 +174,12 @@ const Profile = () => {
     <Box sx={{ p: 3 }}>
       <Box sx={{ maxWidth: 800, mx: 'auto' }}>
         <Typography variant="h4" sx={{ fontWeight: 700, mb: 4 }}>
-          Profile Settings
+          {t('profile.pageTitle')}
         </Typography>
 
         <Paper sx={{ p: 4, borderRadius: 3 }}>
           <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
-            Profile Picture
+            {t('profile.profilePictureTitle')}
           </Typography>
 
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -197,7 +199,7 @@ const Profile = () => {
                 }}
                 src={profilePictureUrl}
               >
-                {!profilePicture && user?.full_name?.charAt(0)?.toUpperCase() || 'U'}
+                {!profilePicture && user?.full_name?.charAt(0)?.toUpperCase() || t('profile.avatarFallback')}
               </Avatar>
               
               {/* Upload button overlay */}
@@ -230,10 +232,10 @@ const Profile = () => {
             {/* Actions */}
             <Stack spacing={2}>
               <Typography variant="body2" color="text.secondary">
-                Upload a profile picture (max 5MB)
+                {t('profile.uploadHint')}
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                Supported formats: JPG, PNG, GIF, WebP
+                {t('profile.supportedFormats')}
               </Typography>
               <Box sx={{ display: 'flex', gap: 2 }}>
                 <Button
@@ -242,7 +244,7 @@ const Profile = () => {
                   onClick={() => fileInputRef.current?.click()}
                   disabled={loading}
                 >
-                  Upload
+                  {t('profile.upload')}
                 </Button>
                 {profilePicture && (
                   <Button
@@ -252,7 +254,7 @@ const Profile = () => {
                     onClick={handleDelete}
                     disabled={loading}
                   >
-                    Delete
+                    {t('profile.delete')}
                   </Button>
                 )}
               </Box>
@@ -264,11 +266,11 @@ const Profile = () => {
 
           {/* Editable User Info */}
           <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
-            Profile Information
+            {t('profile.profileInformationTitle')}
           </Typography>
           <Stack spacing={3}>
             <TextField
-              label="Full Name"
+              label={t('profile.fullNameLabel')}
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
               fullWidth
@@ -276,7 +278,7 @@ const Profile = () => {
               disabled={loading}
             />
             <TextField
-              label="Email"
+              label={t('profile.emailLabel')}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               fullWidth
@@ -285,8 +287,8 @@ const Profile = () => {
               disabled={loading}
             />
             <Box>
-              <Typography variant="caption" color="text.secondary">Role</Typography>
-              <Typography variant="body1" fontWeight={600}>{user?.role || 'User'}</Typography>
+              <Typography variant="caption" color="text.secondary">{t('profile.roleLabel')}</Typography>
+              <Typography variant="body1" fontWeight={600}>{user?.role || t('profile.roleDefault')}</Typography>
             </Box>
             <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
               <Button
@@ -302,7 +304,7 @@ const Profile = () => {
                   fontWeight: 600,
                 }}
               >
-                {loading ? 'Saving...' : 'Save Changes'}
+                {loading ? t('profile.saving') : t('profile.saveChanges')}
               </Button>
             </Box>
           </Stack>

@@ -15,6 +15,7 @@ class TaskResponse(BaseModel):
     target_table: str | None
     column_rules: list[dict[str, Any]] | None
     category_metadata: dict[str, Any] | None = None
+    validation_report: dict[str, Any] | None = None
     is_active: bool
     created_at: datetime
     template_data: list[dict[str, Any]] | None = None

@@ -16,7 +16,7 @@ import {
 } from '@mui/material'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
-import mascot from '../../assets/mascot.png'
+import { useTranslation } from 'react-i18next'
 import EmailOutlinedIconImport from '@mui/icons-material/EmailOutlined'
 import LockOutlinedIconImport from '@mui/icons-material/LockOutlined'
 import AppleIconImport from '@mui/icons-material/Apple'
@@ -24,10 +24,13 @@ import VisibilityIconImport from '@mui/icons-material/Visibility'
 import VisibilityOffIconImport from '@mui/icons-material/VisibilityOff'
 import ArrowForwardIconImport from '@mui/icons-material/ArrowForward'
 import ArrowBackIconImport from '@mui/icons-material/ArrowBack'
+import InstagramIconImport from '@mui/icons-material/Instagram'
+import YouTubeIconImport from '@mui/icons-material/YouTube'
+import LinkedInIconImport from '@mui/icons-material/LinkedIn'
 import { useAuth } from '../../context/AuthContext.jsx'
+import LanguageSwitcher from '../LanguageSwitcher.jsx'
 import { GoogleGlyph, FacebookGlyph } from './SocialIcons.jsx'
 import {
-  AUTH_PAGE_BG,
   AUTH_HERO_BG,
   AUTH_TITLE_GRADIENT,
   AUTH_CARD_RADIUS,
@@ -38,6 +41,7 @@ import {
   authButtonStyles,
   authSocialCircleStyles,
 } from './authStyles.js'
+import { FloatingCard, BarChartMock, PieChartMock, IconChip, AuthPageBackdrop } from './AuthDecorations.jsx'
 
 const EmailOutlinedIcon = EmailOutlinedIconImport?.default || EmailOutlinedIconImport
 const LockOutlinedIcon = LockOutlinedIconImport?.default || LockOutlinedIconImport
@@ -46,8 +50,14 @@ const VisibilityIcon = VisibilityIconImport?.default || VisibilityIconImport
 const VisibilityOffIcon = VisibilityOffIconImport?.default || VisibilityOffIconImport
 const ArrowForwardIcon = ArrowForwardIconImport?.default || ArrowForwardIconImport
 const ArrowBackIcon = ArrowBackIconImport?.default || ArrowBackIconImport
+const InstagramIcon = InstagramIconImport?.default || InstagramIconImport
+const YouTubeIcon = YouTubeIconImport?.default || YouTubeIconImport
+const LinkedInIcon = LinkedInIconImport?.default || LinkedInIconImport
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 const Login = () => {
+  const { t } = useTranslation('components')
   const navigate = useNavigate()
   const { login } = useAuth()
   const [email, setEmail] = useState('')
@@ -64,7 +74,18 @@ const Login = () => {
       setEmail(rememberedEmail)
       setRememberMe(true)
     }
-  }, [])
+
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('error') === 'google_auth_failed') {
+      setError(t('login.googleAuthFailed'))
+    } else if (params.get('error') === 'account_deactivated') {
+      setError(t('login.accountDeactivated'))
+    }
+  }, [t])
+
+  const handleGoogleSignIn = () => {
+    window.location.href = `${API_BASE_URL}/api/auth/google/login`
+  }
 
   const validateEmail = (value) => {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
@@ -76,12 +97,12 @@ const Login = () => {
     setStatus('')
 
     if (!email.trim() || !validateEmail(email)) {
-      setError('Please enter a valid email address.')
+      setError(t('login.invalidEmail'))
       return
     }
 
     if (!password.trim() || password.length < 8) {
-      setError('Password must be at least 8 characters long.')
+      setError(t('login.passwordTooShort'))
       return
     }
 
@@ -90,7 +111,7 @@ const Login = () => {
       // useAuth().login() handles storing the token/user under the single
       // shared key ('brainopx_token') that the rest of the app reads from.
       await login({ email, password })
-      setStatus('Signed in successfully.')
+      setStatus(t('login.signedInSuccess'))
 
       if (rememberMe) {
         localStorage.setItem('rememberedEmail', email)
@@ -99,7 +120,7 @@ const Login = () => {
       }
       navigate('/dashboard')
     } catch (authError) {
-      setError(authError?.message || 'Unable to sign in. Please check your credentials.')
+      setError(authError?.message || t('login.signInFailed'))
     } finally {
       setIsLoading(false)
     }
@@ -110,35 +131,50 @@ const Login = () => {
       component="main"
       sx={{
         minHeight: '100vh',
-        background: AUTH_PAGE_BG,
+        background: 'linear-gradient(180deg, #050915 0%, #0a1230 45%, #060a1c 100%)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         px: 2,
         py: 3,
         position: 'relative',
+        overflow: 'hidden',
       }}
     >
+      <AuthPageBackdrop />
       <Button
         onClick={() => navigate('/landing')}
         startIcon={<ArrowBackIcon />}
         sx={{
           position: 'absolute',
+          zIndex: 1,
           top: { xs: 12, md: 24 },
           left: { xs: 12, md: 24 },
           textTransform: 'none',
           fontWeight: 600,
-          color: '#475569',
-          '&:hover': { backgroundColor: 'rgba(59,102,255,0.08)' },
+          color: '#e2e8f0',
+          '&:hover': { backgroundColor: 'rgba(255,255,255,0.08)' },
         }}
       >
-        Back to Home
+        {t('login.backToHome')}
       </Button>
+      <Box
+        sx={{
+          position: 'absolute',
+          zIndex: 1,
+          top: { xs: 12, md: 24 },
+          right: { xs: 12, md: 24 },
+        }}
+      >
+        <LanguageSwitcher variant="label" />
+      </Box>
       <Paper
         elevation={10}
         sx={{
+          position: 'relative',
+          zIndex: 1,
           width: '100%',
-          maxWidth: 760,
+          maxWidth: 960,
           borderRadius: AUTH_CARD_RADIUS,
           overflow: 'hidden',
           boxShadow: AUTH_CARD_SHADOW,
@@ -165,10 +201,23 @@ const Login = () => {
               overflow: 'hidden',
             }}
           >
-            <Box sx={{ position: 'absolute', top: 18, left: 18, width: 56, height: 56, borderRadius: '50%', bgcolor: 'rgba(255,255,255,0.12)' }} />
-            <Box sx={{ position: 'absolute', top: 38, left: 86, width: 10, height: 56, borderRadius: 8, bgcolor: 'rgba(255,255,255,0.18)' }} />
-            <Box sx={{ position: 'absolute', bottom: 24, right: 32, width: 96, height: 96, borderRadius: '50%', bgcolor: 'rgba(255,255,255,0.08)' }} />
-            <Box sx={{ position: 'absolute', bottom: 64, left: 32, width: 72, height: 72, borderRadius: '50%', bgcolor: 'rgba(255,255,255,0.08)' }} />
+            <Box sx={{ position: 'absolute', bottom: -20, left: -20, width: 160, height: 160, borderRadius: '50%', background: 'radial-gradient(circle, rgba(59,102,255,0.28), transparent 70%)', filter: 'blur(4px)' }} />
+
+            <FloatingCard top="3%" right="8%" duration={5.5} delay={0.5} rotateFrom={10} rotateTo={-6}>
+              <IconChip icon={<InstagramIcon fontSize="small" />} color="#e1306c" />
+            </FloatingCard>
+            <FloatingCard top="36%" right="3%" duration={7} delay={1.1} rotateFrom={-10} rotateTo={8}>
+              <IconChip icon={<YouTubeIcon fontSize="small" />} color="#ff4d4d" />
+            </FloatingCard>
+            <FloatingCard bottom="30%" right="8%" duration={6} delay={0.3} rotateFrom={6} rotateTo={-8}>
+              <IconChip icon={<LinkedInIcon fontSize="small" />} color="#5b9bff" />
+            </FloatingCard>
+            <FloatingCard bottom="8%" left="6%" duration={6.5} rotateFrom={-6} rotateTo={5}>
+              <BarChartMock />
+            </FloatingCard>
+            <FloatingCard bottom="6%" right="16%" duration={7.5} delay={0.8} rotateFrom={-5} rotateTo={7}>
+              <PieChartMock />
+            </FloatingCard>
 
             <Box sx={{ zIndex: 1 }}>
               <motion.div
@@ -185,21 +234,14 @@ const Login = () => {
                     ...AUTH_TITLE_GRADIENT,
                   }}
                 >
-                  OUR INTELLIGENT ASSISTANT BRAINOPX
+                  {t('login.heroTitle')}
                 </Typography>
               </motion.div>
-                 <Box component="img" src={mascot} alt="mascot" sx={{ width: 150, mt: 2, display: 'block' }} />
-            </Box>
-
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, mt: 2.5, zIndex: 1 }}>
-              <Box sx={{ width: 48, height: 48, borderRadius: 3, bgcolor: 'rgba(255,255,255,0.12)' }} />
-              <Box sx={{ width: 34, height: 34, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.18)' }} />
-              <Box sx={{ width: 66, height: 66, borderRadius: '50%', bgcolor: 'rgba(255,255,255,0.08)' }} />
             </Box>
           </Box>
 
-          <Box sx={{ background: '#ffffff', px: { xs: 4, md: 4.5 }, py: { xs: 3.5, md: 4.5 }, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Box sx={{ width: '100%', maxWidth: 380 }}>
+          <Box sx={{ background: '#ffffff', px: { xs: 4, md: 6 }, py: { xs: 3.5, md: 4.5 }, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Box sx={{ width: '100%', maxWidth: 460 }}>
               <Box sx={{ display: 'flex', justifyContent: 'center', mb: 2.5 }}>
                  <Box
                    sx={{
@@ -218,10 +260,10 @@ const Login = () => {
                 </Box>
               </Box>
               <Typography variant="h5" align="center" sx={{ fontWeight: 700, mb: 0.75, color: '#1e293b' }}>
-                Hello ! Welcome back
+                {t('login.welcomeBack')}
               </Typography>
               <Typography variant="body2" align="center" sx={{ mb: 3, color: '#64748b' }}>
-               Enter Your Credentials to access your account .
+               {t('login.enterCredentials')}
               </Typography>
 
               <Stack component="form" spacing={2.25} onSubmit={handleSubmit} noValidate>
@@ -231,8 +273,8 @@ const Login = () => {
                 <TextField
                   fullWidth
                   required
-                  label="Email"
-                  placeholder="Enter your email address"
+                  label={t('login.emailLabel')}
+                  placeholder={t('login.emailPlaceholder')}
                   name="email"
                   type="email"
                   value={email}
@@ -251,8 +293,8 @@ const Login = () => {
                 <TextField
                   fullWidth
                   required
-                  label="Password"
-                  placeholder="Enter your password"
+                  label={t('login.passwordLabel')}
+                  placeholder={t('login.passwordPlaceholder')}
                   name="password"
                   type={showPassword ? 'text' : 'password'}
                   value={password}
@@ -268,7 +310,7 @@ const Login = () => {
                       <InputAdornment position="end">
                         <IconButton
                           edge="end"
-                          aria-label={showPassword ? 'Hide password' : 'Show password'}
+                          aria-label={showPassword ? t('login.hidePassword') : t('login.showPassword')}
                           onClick={() => setShowPassword((s) => !s)}
                           onMouseDown={(e) => e.preventDefault()}
                           sx={{ color: '#64748b' }}
@@ -284,11 +326,11 @@ const Login = () => {
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <FormControlLabel
                     control={<Checkbox checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} sx={authCheckboxStyles} />}
-                    label={<Typography variant="body2" sx={{ color: '#475569' }}>Remember me</Typography>}
+                    label={<Typography variant="body2" sx={{ color: '#475569' }}>{t('login.rememberMe')}</Typography>}
                     sx={{ ml: -1 }}
                   />
                  <Link href="/forgot-password" underline="hover" sx={{ fontSize: 14, ...authLinkStyles }}>
-                 Reset Password?</Link>
+                 {t('login.resetPassword')}</Link>
                 </Box>
 
                 <Button
@@ -304,27 +346,27 @@ const Login = () => {
                   }}
                   disabled={isLoading}
                 >
-                  {isLoading ? 'Signing in...' : 'Login'}
+                  {isLoading ? t('login.signingIn') : t('login.loginButton')}
                 </Button>
 
-                <Divider sx={{ my: 1, '&::before, &::after': { borderColor: '#cbd5e1' }, color: '#64748b' }}>or</Divider>
+                <Divider sx={{ my: 1, '&::before, &::after': { borderColor: '#cbd5e1' }, color: '#64748b' }}>{t('login.or')}</Divider>
 
                 <Stack direction="row" spacing={2} justifyContent="center">
-                  <IconButton aria-label="Continue with Google" sx={authSocialCircleStyles}>
+                  <IconButton aria-label={t('login.continueWithGoogle')} onClick={handleGoogleSignIn} sx={authSocialCircleStyles}>
                     <GoogleGlyph size={22} />
                   </IconButton>
-                  <IconButton aria-label="Continue with Facebook" sx={authSocialCircleStyles}>
+                  <IconButton aria-label={t('login.continueWithFacebook')} sx={authSocialCircleStyles}>
                     <FacebookGlyph size={22} />
                   </IconButton>
-                  <IconButton aria-label="Continue with Apple" sx={authSocialCircleStyles}>
+                  <IconButton aria-label={t('login.continueWithApple')} sx={authSocialCircleStyles}>
                     <AppleIcon sx={{ color: '#1e293b' }} />
                   </IconButton>
                 </Stack>
 
                 <Typography align="center" sx={{ color: '#64748b', mt: 0.75 }}>
-                  Don’t have an account?{' '}
+                  {t('login.noAccount')}{' '}
                   <Link href="/register" underline="hover" sx={authLinkStyles}>
-                    Create Account
+                    {t('login.createAccount')}
                   </Link>
                 </Typography>
               </Stack>

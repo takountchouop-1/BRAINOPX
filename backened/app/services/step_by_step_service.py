@@ -637,6 +637,9 @@ def get_workflow_progress(
             else None
         ),
         "example_source": example_source,
+        "awaiting_attachment": bool(
+            current_engine_step and current_engine_step.get("awaiting_attachment")
+        ),
         "steps": (
             [presenter.public_step(s) for s in steps]
             if isinstance(steps, list)
@@ -813,6 +816,102 @@ def process_step_input(
             focus_step.get("example_source") or ""
         ),
         "all_completed": turn["all_completed"],
+        "awaiting_attachment": bool(focus_step.get("awaiting_attachment")),
+        "progress": get_workflow_progress(request),
+    }
+
+
+# ============================================================
+# RESOLVING AN ATTACHMENT THE AI ASKED FOR
+# ============================================================
+
+def submit_step_attachment(
+    request,
+    db: Session,
+    attachment_summary: str,
+) -> dict:
+    """
+    Feed a just-uploaded file/screenshot to the step the AI asked for
+    it on, and reply with an explanation informed by it.
+
+    Mirrors process_step_input's own workflow/steps loading, since
+    guided_engine.resolve_attachment needs the same live step objects
+    take_turn() works from. The step this applies to is whichever one
+    is current — the router only accepts an upload while that step's
+    awaiting_attachment flag is set, so there is no ambiguity about
+    which step it belongs to.
+    """
+
+    workflow = _get_workflow_data(request)
+
+    if not workflow:
+        return {
+            "ai_response": "The step-by-step workflow has not been initialized.",
+            "step_index": 0,
+            "accepted": False,
+        }
+
+    rules = workflow.get("rules", []) or []
+    current_step = int(workflow.get("current_step", 0))
+
+    if current_step >= len(rules):
+        return {
+            "ai_response": "All rules have been completed.",
+            "step_index": current_step,
+            "accepted": False,
+        }
+
+    steps = workflow.get("steps")
+
+    if not isinstance(steps, list) or len(steps) != len(rules):
+        steps = engine.build_steps(rules)
+
+        for step, rule in zip(steps, rules):
+            engine.prepare_example(step, rule, force_new=True)
+
+    step = steps[current_step]
+
+    if not step.get("awaiting_attachment"):
+        return {
+            "ai_response": "This step isn't waiting on an attachment right now.",
+            "step_index": current_step,
+            "accepted": False,
+        }
+
+    turn = engine.resolve_attachment(
+        steps=steps,
+        current_index=current_step,
+        rules=rules,
+        step=step,
+        attachment_summary=attachment_summary,
+    )
+
+    engine.record_exchange(
+        turn["step"],
+        "[attachment]",
+        " ".join(turn["message_lines"][:2]),
+    )
+
+    ai_response = _render_blocks(turn["message_blocks"])
+
+    workflow["steps"] = steps
+    workflow["updated_at"] = datetime.now().isoformat()
+
+    _save_workflow_data(request, workflow)
+
+    try:
+        db.add(request)
+        db.commit()
+        db.refresh(request)
+    except Exception as exc:
+        logger.exception("Failed to save state after a step attachment: %s", exc)
+        db.rollback()
+
+    return {
+        "ai_response": ai_response,
+        "step_index": current_step,
+        "step_name": presenter.step_label(turn["step"]),
+        "accepted": True,
         "progress": get_workflow_progress(request),
     }
 

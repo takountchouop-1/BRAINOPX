@@ -1,7 +1,12 @@
+import os
 import random
+import secrets
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 
+import requests
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from ..db.database import get_db
@@ -22,7 +27,17 @@ from ..core.jwt_service import create_access_token
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-RESET_CODE_VALID_MINUTES = 15
+RESET_CODE_VALID_MINUTES = 5
+
+# --- Google OAuth (Sign in with Google) ---
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/api/auth/google/callback")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
+GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_ENDPOINT = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -160,3 +175,100 @@ def reset_password(payload: PasswordResetConfirm, db: Session = Depends(get_db))
     db.commit()
 
     return {"message": "Password has been reset successfully. You can now sign in."}
+
+
+# --- Sign in with Google ---
+
+@router.get("/google/login")
+def google_login():
+    """
+    Kicks off the Google OAuth flow: sends the browser to Google's own
+    account chooser / consent screen. Google redirects back to
+    /api/auth/google/callback once the user picks an account.
+    """
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google sign-in is not configured on the server.",
+        )
+
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "openid email profile",
+        # Always show the account chooser instead of silently
+        # reusing whichever Google session is already active.
+        "prompt": "select_account",
+        "access_type": "online",
+    }
+    return RedirectResponse(f"{GOOGLE_AUTH_ENDPOINT}?{urlencode(params)}")
+
+
+@router.get("/google/callback")
+def google_callback(code: str | None = None, error: str | None = None, db: Session = Depends(get_db)):
+    """
+    Google lands the browser back here with either an authorization
+    `code` or an `error` (e.g. the user clicked Cancel). Exchanges the
+    code for tokens, looks up the Google profile, finds-or-creates the
+    matching local user, then hands off to the frontend with a normal
+    BRAINOPX access token so the rest of the app doesn't need to know
+    the user signed in via Google.
+    """
+    if error or not code:
+        return RedirectResponse(f"{FRONTEND_URL}/login?error=google_auth_failed")
+
+    token_resp = requests.post(
+        GOOGLE_TOKEN_ENDPOINT,
+        data={
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": GOOGLE_REDIRECT_URI,
+            "grant_type": "authorization_code",
+        },
+        timeout=10,
+    )
+    if not token_resp.ok:
+        return RedirectResponse(f"{FRONTEND_URL}/login?error=google_auth_failed")
+
+    google_access_token = token_resp.json().get("access_token")
+
+    userinfo_resp = requests.get(
+        GOOGLE_USERINFO_ENDPOINT,
+        headers={"Authorization": f"Bearer {google_access_token}"},
+        timeout=10,
+    )
+    if not userinfo_resp.ok:
+        return RedirectResponse(f"{FRONTEND_URL}/login?error=google_auth_failed")
+
+    profile = userinfo_resp.json()
+    email = profile.get("email")
+    if not email:
+        return RedirectResponse(f"{FRONTEND_URL}/login?error=google_auth_failed")
+
+    user = db.query(User).filter(User.email == email).first()
+
+    if user:
+        if not user.profile_picture and profile.get("picture"):
+            user.profile_picture = profile["picture"]
+    else:
+        user = User(
+            full_name=profile.get("name") or email.split("@")[0],
+            email=email,
+            # Google-created accounts never sign in with a password;
+            # this hash is unusable for that purpose (random, discarded).
+            hashed_password=hash_password(secrets.token_urlsafe(32)),
+            profile_picture=profile.get("picture"),
+        )
+        db.add(user)
+
+    if not user.is_active:
+        return RedirectResponse(f"{FRONTEND_URL}/login?error=account_deactivated")
+
+    user.last_login_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token(user_id=user.id, email=user.email)
+    return RedirectResponse(f"{FRONTEND_URL}/auth/google/callback?token={token}")

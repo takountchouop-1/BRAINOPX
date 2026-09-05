@@ -4,7 +4,7 @@ from .groq_service import get_ai_response as groq_response
 
 load_dotenv()
 
-def get_ai_response(validation_errors, user_message, conversation_history=[], provider=None, rules_content="", parsed_rules=None, mode="validation"):
+def get_ai_response(validation_errors, user_message, conversation_history=[], provider=None, rules_content="", parsed_rules=None, mode="validation", language="en"):
     """
     Get AI response from Groq.
     """
@@ -16,4 +16,5 @@ def get_ai_response(validation_errors, user_message, conversation_history=[], pr
         rules_content=rules_content,
         parsed_rules=parsed_rules,
         mode=mode,
+        language=language,
     )

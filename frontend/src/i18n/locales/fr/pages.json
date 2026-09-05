@@ -83,6 +83,11 @@
     "tasksFound_other": "{{count}} tâches trouvées",
     "tasksFoundSearch_one": "{{count}} tâche trouvée pour « {{term}} »",
     "tasksFoundSearch_other": "{{count}} tâches trouvées pour « {{term}} »",
+    "validation": {
+      "needsReview_one": "{{count}} règle à vérifier",
+      "needsReview_other": "{{count}} règles à vérifier",
+      "tooltipIntro": "Ces règles n'ont ni format ni type de valeur exploitable, l'IA peut donc afficher des exemples incohérents :"
+    },
     "errors": {
       "sessionExpired": "Votre session a expiré. Veuillez vous reconnecter.",
       "loadRequestsFailed": "Impossible de charger les demandes ({{status}}).",
@@ -240,9 +245,103 @@
     "signUp": "S'inscrire",
     "badge": "Configuration propulsée par l'IA",
     "titleLine1": "Brainopx",
-    "titleLine2": "assistant intelligent",
+    "titleLine2": "Assistant intelligent",
     "subtitle": "BRAINOPX transforme vos modèles Excel et règles métier en configuration fonctionnelle, guidé par un assistant qui comprend vos données.",
-    "cta": "Commencer gratuitement"
+    "cta": "Commencer gratuitement",
+    "floatTrusted": "Approuvé par 50K+ personnes",
+    "floatTestimonial": "L'IA m'aide à transformer mon entreprise",
+    "floatRating": "Recommandé 5 étoiles",
+    "features": {
+      "badge": "Fonctionnalités",
+      "titleLine1": "Des fonctionnalités puissantes pour",
+      "titleLine2": "simplifier votre planification",
+      "subtitle": "Découvrez comment nos outils propulsés par l'IA peuvent transformer votre productivité et fluidifier votre journée",
+      "tag": "Planification sans effort",
+      "headingPre": "Automatisez et",
+      "headingHighlight": "configurez",
+      "headingPost": "vos tâches métier",
+      "description": "Notre solution réduit les tâches manuelles, minimise les erreurs et garantit une coordination fluide, pour vous laisser vous concentrer sur l'essentiel.",
+      "chatQuestion": "Quel est le meilleur jour et la meilleure heure pour la réunion avec Andrew ?",
+      "chatAnswer": "Bien sûr, je peux vous aider à planifier cette tâche. Voici un horaire possible pour votre semaine :",
+      "meetingWithAndrew": "Réunion avec Andrew",
+      "aiSuggestion": "Suggestion IA",
+      "popupTitle": "Réunion avec le candidat",
+      "timeAndDate": "Date & heure",
+      "guests": "Invités",
+      "location": "Lieu",
+      "platform": "Plateforme",
+      "guestName": "Andrew",
+      "locationValue": "À distance",
+      "platformValue": "Zoom Meeting",
+      "dateValue": "27 mai, 14h30",
+      "reschedule": "Reporter",
+      "joinMeeting": "Rejoindre"
+    },
+    "solutions": {
+      "titleLine1": "Trouvez une solution IA",
+      "titleLine2": "pour votre entreprise",
+      "subtitle": "Découvrez l'avenir de la communication avec notre solution de chat propulsée par l'IA.",
+      "items": [
+        {
+          "title": "Chatbots propulsés par l'IA",
+          "description": "Déployez des chatbots intelligents capables de traiter les demandes clients, d'offrir un support instantané et d'améliorer la satisfaction à toute heure."
+        },
+        {
+          "title": "Support multilingue",
+          "description": "Élargissez votre portée et adressez-vous à un public mondial grâce à des services de chat disponibles en plusieurs langues."
+        },
+        {
+          "title": "Capacités d'intégration",
+          "description": "Intégrez facilement les services de chat IA à vos systèmes et flux de travail existants."
+        },
+        {
+          "title": "Engagement proactif",
+          "description": "Engagez des conversations proactives avec vos clients en fonction de leur comportement et de leurs besoins."
+        }
+      ]
+    },
+    "finalCta": {
+      "titleLine1": "Prêt à transformer",
+      "titleLine2": "votre planification ?",
+      "subtitle": "Rejoignez des milliers de professionnels qui ont déjà simplifié leur planification grâce à notre assistant IA.",
+      "cta": "Commencer"
+    },
+    "story": {
+      "kicker": "Témoignage client",
+      "quote": "Notre équipe ne passe plus des heures à configurer manuellement des règles Excel. Brainopx est notre arme secrète.",
+      "authorName": "Softronic Company",
+      "authorRole": "Douala",
+      "stat1Value": "45+",
+      "stat1Label": "Clients satisfaits",
+      "stat2Value": "5k+",
+      "stat2Label": "Heures économisées en configuration",
+      "stat3Value": "4,8",
+      "stat3Label": "Taux d'avis"
+    },
+    "footer": {
+      "tagline": "Transforme vos modèles Excel et règles métier en configuration fonctionnelle, guidé par l'IA.",
+      "product": {
+        "title": "Produit",
+        "features": "Fonctionnalités",
+        "aiAssistant": "Assistant IA",
+        "taskManagement": "Gestion des tâches",
+        "configurationRequests": "Demandes de configuration"
+      },
+      "resources": {
+        "title": "Ressources",
+        "helpCenter": "Centre d'aide",
+        "documentation": "Documentation",
+        "contact": "Contact",
+        "community": "Communauté"
+      },
+      "company": {
+        "title": "Entreprise",
+        "about": "À propos",
+        "terms": "Conditions d'utilisation",
+        "privacy": "Politique de confidentialité"
+      },
+      "copyright": "© {{year}} BRAINOPX. Tous droits réservés."
+    }
   },
   "profile": {
     "errorInvalidImageType": "Veuillez choisir une image JPEG, PNG, GIF ou WebP.",
@@ -285,6 +384,8 @@
     "errorRegistrationFailedDefault": "L'inscription a échoué. Veuillez réessayer.",
     "statusAccountCreated": "Compte créé avec succès !",
     "errorRegisterFailedDefault": "L'inscription a échoué. Veuillez réessayer.",
+    "backToHome": "Retour à l'accueil",
+    "mascotAlt": "Mascotte BRAINOPX",
     "heroTitle": "Rejoignez BRAINOPX et configurez en toute confiance",
     "welcome": "Créez votre compte",
     "subtitle": "Commencez à transformer vos modèles et règles en configuration fonctionnelle.",

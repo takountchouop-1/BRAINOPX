@@ -10,12 +10,12 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 
 from ..db.database import get_db
-from ..db.models import ConfigurationTask, ConfigurationRequest, User
+from ..db.models import ConfigurationTask, ConfigurationRequest, ReportReferenceFile, ReportScriptVersion, StepAttachment, User
 from ..db.deps import get_current_user
 from ..services.excel_service import extract_column_headers
 from ..services.validation_service import validate_data_rows
 from ..services.template_matcher import auto_match_template, get_all_templates, get_match_summary
-from ..services.groq_service import get_ai_response, get_rule_aware_response, run_rule_workflow, parse_rules_to_json
+from ..services.groq_service import get_ai_response, get_rule_aware_response, run_rule_workflow, parse_rules_to_json, generate_workflow_script, GroqNetworkError
 from ..services.rule_parser import extract_text
 from ..services.skill_engine_service import (
     get_rules_for_task,
@@ -30,7 +30,9 @@ from ..services.step_by_step_service import (
     list_completed_steps,
     edit_step,
     regenerate_current_example,
+    submit_step_attachment,
 )
+from ..services import report_analysis_service
 
 router = APIRouter(prefix="/api/requests", tags=["requests"])
 
@@ -38,6 +40,93 @@ logger = logging.getLogger(__name__)
 
 UPLOAD_DIR = os.path.join("uploads", "requests")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+STEP_ATTACHMENT_DIR = os.path.join("uploads", "requests", "step_attachments")
+os.makedirs(STEP_ATTACHMENT_DIR, exist_ok=True)
+
+STEP_ATTACHMENT_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+STEP_ATTACHMENT_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".doc", ".txt", ".xlsx", ".xls", ".csv"}
+ALLOWED_STEP_ATTACHMENT_EXTENSIONS = STEP_ATTACHMENT_IMAGE_EXTENSIONS | STEP_ATTACHMENT_DOCUMENT_EXTENSIONS
+MAX_STEP_ATTACHMENT_SIZE = 15 * 1024 * 1024  # 15MB
+
+
+def _rules_text_of(task) -> str:
+    """
+    task.rules_content is sometimes a raw string, sometimes a JSON blob
+    of the form {"full_text": "..."} — same unwrapping as the
+    fallback branch of step_chat_with_assistant's sibling AI call.
+    """
+    if not task or not task.rules_content:
+        return ""
+    try:
+        obj = json.loads(task.rules_content)
+        return obj.get("full_text", "") or ""
+    except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
+        return task.rules_content or ""
+
+
+def _run_report_analysis_check(
+    db: Session,
+    request: ConfigurationRequest,
+    task: ConfigurationTask,
+    data_rows: list[dict],
+) -> None:
+    """
+    DB-first unknown-code detection for report_analyses tasks (see
+    report_analysis_service.py). A safe no-op for tasks whose
+    column_rules have no foreign-key columns — most requests are
+    unaffected and keep going through the existing single-pass flow.
+
+    When anomalies are found, appends a summary to the conversation
+    and advances current_stage/status so the request shows as needing
+    more input, without touching the step-by-step / rule-engine flows
+    above this call.
+    """
+
+    if not task.column_rules:
+        return
+
+    try:
+        column_rules = json.loads(task.column_rules)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return
+
+    if not any(isinstance(r, dict) and r.get("foreign_key") for r in column_rules):
+        return
+
+    state = report_analysis_service.run_db_anomaly_check(
+        db, request, data_rows, column_rules, task_type=task.category,
+    )
+
+    if not state.get("anomalies"):
+        return
+
+    pending = report_analysis_service.pending_reference_requests(request)
+    for anomaly in pending:
+        question = (
+            f"I couldn't find code '{anomaly['code']}' (row {anomaly['row']}, "
+            f"column '{anomaly['column']}') in the database. Could you upload a "
+            "production extract so I can cross-check it?"
+        )
+        report_analysis_service.record_question_asked(db, request, anomaly["id"], question)
+
+    conversation = []
+    if request.conversation:
+        try:
+            conversation = json.loads(request.conversation)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            conversation = []
+
+    conversation.append({
+        "sender": "ai",
+        "text": report_analysis_service.build_anomaly_summary_message(state),
+        "timestamp": datetime.now().isoformat(),
+    })
+    request.conversation = json.dumps(conversation)
+    db.add(request)
+    db.commit()
+
+    report_analysis_service.sync_stage_from_state(db, request, state)
 
 
 @router.get("/task-welcome/{task_id}")
@@ -223,6 +312,9 @@ def upload_file(
                 rules_context,
                 rule_results,
             )
+        except GroqNetworkError:
+            rule_results = []
+            ai_welcome_message = "Please check your network and retry."
         except Exception as e:
             # If rule evaluation fails, don't block the upload
             rule_results = []
@@ -257,6 +349,10 @@ def upload_file(
     db.commit()
     db.refresh(new_request)
 
+    # DB-first unknown-code detection — no-op unless the task's target
+    # table has foreign-key columns.
+    _run_report_analysis_check(db, new_request, matched_task, data_rows)
+
     # ── STEP-BY-STEP WORKFLOW INIT ──────────────────────────────────
     # If the task has rules, initialise the step-by-step workflow so the
     # AI guides the user through each rule one at a time.
@@ -286,12 +382,21 @@ def upload_file(
     uploaded_columns = extract_column_headers(saved_path)
     expected_columns = json.loads(matched_task.expected_columns) if matched_task.expected_columns else []
     match_summary = get_match_summary(uploaded_columns, expected_columns)
-    
+
+    # Re-sync from the DB: _run_report_analysis_check (and/or the
+    # step-by-step init above) may have appended to new_request.conversation
+    # since the local `conversation` variable was last built.
+    try:
+        conversation = json.loads(new_request.conversation) if new_request.conversation else []
+    except (json.JSONDecodeError, TypeError, ValueError):
+        conversation = []
+
     return {
         "id": new_request.id,
         "task_id": matched_task.id,
         "task_name": matched_task.name,
         "status": new_request.status,
+        "current_stage": new_request.current_stage,
         "validation_errors": validation_errors,
         "rule_results": rule_results,
         "ai_welcome_message": ai_welcome_message,
@@ -369,6 +474,9 @@ def upload_file_with_template(
                 rules_context,
                 rule_results,
             )
+        except GroqNetworkError:
+            rule_results = []
+            ai_welcome_message = "Please check your network and retry."
         except Exception:
             rule_results = []
             ai_welcome_message = (
@@ -400,12 +508,22 @@ def upload_file_with_template(
     db.add(new_request)
     db.commit()
     db.refresh(new_request)
-    
+
+    # DB-first unknown-code detection — no-op unless the task's target
+    # table has foreign-key columns.
+    _run_report_analysis_check(db, new_request, task, data_rows)
+
+    try:
+        conversation = json.loads(new_request.conversation) if new_request.conversation else []
+    except (json.JSONDecodeError, TypeError, ValueError):
+        conversation = []
+
     return {
         "id": new_request.id,
         "task_id": task.id,
         "task_name": task.name,
         "status": new_request.status,
+        "current_stage": new_request.current_stage,
         "validation_errors": validation_errors,
         "rule_results": rule_results,
         "ai_welcome_message": ai_welcome_message,
@@ -490,11 +608,39 @@ def step_chat_with_assistant(
     request.conversation = json.dumps(conversation_history)
     db.commit()
     
-    # Update request status based on workflow completion
+    # Finishing the walkthrough *is* finishing the request for this
+    # workflow — there is no further script-generation step waiting
+    # for it, so leaving it at "data_validated" (as before) meant it
+    # never left the "pending" bucket on the dashboard/graph until
+    # someone separately clicked "Mark complete". Complete it here
+    # instead, so the dashboard summary and Graph Analysis tab pick it
+    # up as soon as the last step is answered.
     if result.get("all_completed", False):
-        request.status = "data_validated"
+        request.status = "processing_completed"
         db.commit()
-    
+
+        # The user's answers are the whole point of the walkthrough —
+        # synthesize the script they describe right away rather than
+        # making completion a dead end the user has to separately
+        # trigger a script for.
+        try:
+            task = db.query(ConfigurationTask).filter(
+                ConfigurationTask.id == request.task_id
+            ).first()
+            request.generated_script = generate_workflow_script(
+                task_name=task.name if task else "",
+                task_description=task.description if task else "",
+                rules_content=_rules_text_of(task),
+                completed_steps=list_completed_steps(request),
+                language=getattr(current_user, "language", "en") or "en",
+            )
+            db.commit()
+        except Exception:
+            logger.exception(
+                "Script generation failed for request %s; leaving it completed without one.",
+                request_id,
+            )
+
     return {
         "request_id": request_id,
         "user_message": message,
@@ -507,6 +653,121 @@ def step_chat_with_assistant(
         "progress": result.get("progress", None),
         "suggested_example": result.get("suggested_example", ""),
         "example_source": result.get("example_source", ""),
+        "awaiting_attachment": result.get("awaiting_attachment", False),
+        "conversation": conversation_history,
+        "generated_script": request.generated_script,
+    }
+
+
+@router.post("/{request_id}/step-attachment")
+def submit_step_attachment_endpoint(
+    request_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Submit the file/screenshot the AI asked for after several confused
+    turns on the current step (see guided_engine's off-track tracking).
+
+    Unlike /reference-file (a production extract cross-checked against
+    an anomaly), this is never compared against anything — it only
+    gives the AI more context for its next explanation, so the step
+    stays exactly where it was.
+    """
+    request = db.query(ConfigurationRequest).filter(
+        ConfigurationRequest.id == request_id
+    ).first()
+
+    if not request:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found.")
+
+    ext = os.path.splitext(file.filename or "")[1].lower()
+
+    if ext not in ALLOWED_STEP_ATTACHMENT_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported file type. Allowed: image, PDF, Word, Excel, CSV, or plain text.",
+        )
+
+    data = file.file.read()
+
+    if not data:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The uploaded file is empty.")
+
+    if len(data) > MAX_STEP_ATTACHMENT_SIZE:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is too large (15MB max).")
+
+    is_image = ext in STEP_ATTACHMENT_IMAGE_EXTENSIONS
+
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+    stored_path = os.path.join(STEP_ATTACHMENT_DIR, unique_name)
+
+    with open(stored_path, "wb") as buffer:
+        buffer.write(data)
+
+    extracted_text = None
+
+    if not is_image:
+        try:
+            extracted_text = extract_text(stored_path)[:20_000]
+        except Exception as exc:
+            logger.warning("Could not extract text from step attachment %r: %s", file.filename, exc)
+            extracted_text = None
+
+    # No OCR/vision pipeline reads an image's pixels here — the model
+    # only ever sees this note, never the picture itself.
+    attachment_summary = extracted_text or f"[{'Image' if is_image else 'File'} attached: {file.filename}]"
+
+    workflow_data = json.loads(request.eval_profile) if request.eval_profile else {}
+    step_index = int((workflow_data.get("step_workflow") or {}).get("current_step", 0)) if isinstance(workflow_data, dict) else 0
+
+    attachment = StepAttachment(
+        request_id=request.id,
+        uploaded_by=current_user.id,
+        step_index=step_index,
+        original_filename=file.filename or unique_name,
+        stored_path=stored_path,
+        content_type=file.content_type,
+        size_bytes=len(data),
+        is_image=is_image,
+        extracted_text=extracted_text,
+    )
+    db.add(attachment)
+    db.commit()
+
+    result = submit_step_attachment(request, db, attachment_summary)
+
+    if not result.get("accepted"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.get("ai_response", "Could not process that attachment."))
+
+    conversation_history = []
+    if request.conversation:
+        try:
+            conversation_history = json.loads(request.conversation)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            conversation_history = []
+
+    conversation_history.append({
+        "sender": "user",
+        "text": f"[Attached: {file.filename}]",
+        "timestamp": datetime.now().isoformat(),
+    })
+    conversation_history.append({
+        "sender": "ai",
+        "text": result.get("ai_response", ""),
+        "timestamp": datetime.now().isoformat(),
+    })
+
+    request.conversation = json.dumps(conversation_history)
+    db.commit()
+
+    return {
+        "request_id": request_id,
+        "ai_response": result.get("ai_response", ""),
+        "step_index": result.get("step_index", 0),
+        "step_name": result.get("step_name", ""),
+        "progress": result.get("progress", None),
         "conversation": conversation_history,
     }
 
@@ -643,6 +904,51 @@ def regenerate_step_example(
     }
 
 
+@router.post("/{request_id}/regenerate-workflow-script")
+def regenerate_workflow_script(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Re-run script generation for a completed rules-document walkthrough.
+
+    Covers the case where the automatic generation on the final
+    step-chat turn failed (e.g. a Groq rate limit) or the user wants a
+    fresh attempt — this is the manual retry for that, distinct from
+    report_analyses' own /generate-script.
+    """
+    request = db.query(ConfigurationRequest).filter(
+        ConfigurationRequest.id == request_id
+    ).first()
+
+    if not request:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found.")
+
+    if request.status != "processing_completed":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Finish every step before generating the script.",
+        )
+
+    task = db.query(ConfigurationTask).filter(ConfigurationTask.id == request.task_id).first()
+
+    try:
+        request.generated_script = generate_workflow_script(
+            task_name=task.name if task else "",
+            task_description=task.description if task else "",
+            rules_content=task.rules_content if task else "",
+            completed_steps=list_completed_steps(request),
+            language=getattr(current_user, "language", "en") or "en",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+    db.commit()
+
+    return {"request_id": request_id, "generated_script": request.generated_script}
+
+
 def _request_progress(request) -> dict:
     """
     How far a configuration request has got.
@@ -762,6 +1068,7 @@ def list_requests(
             "task_id": request.task_id,
             "task_name": task.name if task else "Unassigned task",
             "task_description": (task.description if task else None),
+            "task_category": (task.category if task else None),
             "status": request.status,
             "priority": request.priority or "medium",
             "bucket": bucket,
@@ -855,8 +1162,9 @@ def set_request_priority(
     """
     Change how urgent a request is.
 
-    Only the person who owns it may change it, matching who is
-    allowed to delete it.
+    The dashboard shows every user's requests to every signed-in user,
+    so priority follows the same shared visibility: anyone signed in
+    may change it, not just the request's original owner.
     """
 
     value = str(body.priority or "").strip().lower()
@@ -877,16 +1185,55 @@ def set_request_priority(
             detail="Request not found.",
         )
 
-    if request.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only change your own requests.",
-        )
-
     request.priority = value
     db.commit()
 
     return {"id": request_id, "priority": value}
+
+
+# Statuses that already mean every step of the workflow is behind the
+# request — reaching one of these is what unlocks the manual "mark
+# complete" action below.
+STEPS_FINISHED_STATUSES = {"data_validated", "script_generated", "processing_completed"}
+
+
+@router.patch("/{request_id}/complete", status_code=status.HTTP_200_OK)
+def complete_request(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Mark a request as fully completed.
+
+    Only allowed once every step of its workflow is finished — either
+    the status already reflects that, or the step-by-step progress
+    count has reached its total.
+    """
+
+    request = db.query(ConfigurationRequest).filter(
+        ConfigurationRequest.id == request_id
+    ).first()
+
+    if not request:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Request not found.",
+        )
+
+    progress = _request_progress(request)
+    all_steps_done = progress["total_steps"] > 0 and progress["completed_steps"] >= progress["total_steps"]
+
+    if request.status not in STEPS_FINISHED_STATUSES and not all_steps_done:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Finish every step before marking this task complete.",
+        )
+
+    request.status = "processing_completed"
+    db.commit()
+
+    return {"id": request_id, "status": request.status}
 
 
 @router.post("/bulk-delete", status_code=status.HTTP_200_OK)
@@ -1046,15 +1393,19 @@ def get_request(
             eval_profile = None
     
     generated_script = request.generated_script
-    
+    analysis_state = eval_profile.get("analysis_state") if isinstance(eval_profile, dict) else None
+
     return {
         "id": request.id,
         "task_id": request.task_id,
         "status": request.status,
+        "current_stage": request.current_stage,
         "validation_errors": validation_errors,
         "eval_profile": eval_profile,
         "conversation": conversation,
         "generated_script": generated_script,
+        "anomalies": (analysis_state or {}).get("anomalies", []),
+        "unresolved_issues": (analysis_state or {}).get("unresolved_issues", []),
         "uploaded_filename": request.uploaded_filename,
         "created_at": request.created_at,
         "updated_at": request.updated_at,
@@ -1065,7 +1416,6 @@ def get_request(
 def chat_with_assistant(
     request_id: int,
     message: str = Form(...),
-    attachment: UploadFile = File(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1117,41 +1467,44 @@ def chat_with_assistant(
     # If the task has rules, use the rule-aware AI response so the assistant
     # guides the user based on the task's rules and the current per-rule verdicts.
     rules = get_rules_for_task(db, request.task_id)
-    if rules:
-        ai_response = get_rule_aware_response(
-            task_name=task_name,
-            rules=rules,
-            results=rule_results,
-            conversation_history=conversation_history,
-            user_message=message,
-        )
-    else:
-        # Fall back to the classic validation-error AI for tasks without rules
-        rules_text = ""
-        parsed_rules = []
-        if task:
-            if task.rules_content:
-                try:
-                    rules_content_obj = json.loads(task.rules_content)
-                    rules_text = rules_content_obj.get("full_text", "") or ""
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    rules_text = task.rules_content or ""
-            if task.category_metadata:
-                try:
-                    category_metadata = json.loads(task.category_metadata)
-                    if isinstance(category_metadata, dict):
-                        parsed_rules = category_metadata.get("parsed_rules", []) or []
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    parsed_rules = []
+    try:
+        if rules:
+            ai_response = get_rule_aware_response(
+                task_name=task_name,
+                rules=rules,
+                results=rule_results,
+                conversation_history=conversation_history,
+                user_message=message,
+            )
+        else:
+            # Fall back to the classic validation-error AI for tasks without rules
+            rules_text = ""
+            parsed_rules = []
+            if task:
+                if task.rules_content:
+                    try:
+                        rules_content_obj = json.loads(task.rules_content)
+                        rules_text = rules_content_obj.get("full_text", "") or ""
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        rules_text = task.rules_content or ""
+                if task.category_metadata:
+                    try:
+                        category_metadata = json.loads(task.category_metadata)
+                        if isinstance(category_metadata, dict):
+                            parsed_rules = category_metadata.get("parsed_rules", []) or []
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        parsed_rules = []
 
-        ai_response = get_ai_response(
-            task_name=task_name,
-            validation_errors=validation_errors,
-            conversation_history=conversation_history,
-            user_message=message,
-            rules_content=rules_text,
-            parsed_rules=parsed_rules,
-        )
+            ai_response = get_ai_response(
+                task_name=task_name,
+                validation_errors=validation_errors,
+                conversation_history=conversation_history,
+                user_message=message,
+                rules_content=rules_text,
+                parsed_rules=parsed_rules,
+            )
+    except GroqNetworkError:
+        ai_response = "Please check your network and retry."
     
     # Save conversation
     conversation_history.append({
@@ -1167,10 +1520,225 @@ def chat_with_assistant(
     
     request.conversation = json.dumps(conversation_history)
     db.commit()
-    
+
     return {
         "request_id": request_id,
         "user_message": message,
         "ai_response": ai_response,
         "conversation": conversation_history,
+    }
+
+
+# ============================================================
+# REPORT ANALYSIS: reference files, conflicts, decisions, scripts
+# ============================================================
+
+def _get_request_or_404(db: Session, request_id: int) -> ConfigurationRequest:
+    request = db.query(ConfigurationRequest).filter(
+        ConfigurationRequest.id == request_id
+    ).first()
+    if not request:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found.")
+    return request
+
+
+@router.get("/{request_id}/anomalies")
+def get_request_anomalies(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    The current anomaly/conflict list for a report analysis request,
+    for the chat UI to render (unknown codes still needing a reference
+    file, conflicts still needing an update/ignore decision).
+    """
+    request = _get_request_or_404(db, request_id)
+    state = report_analysis_service.get_analysis_state(request)
+
+    return {
+        "request_id": request_id,
+        "current_stage": request.current_stage,
+        "anomalies": state.get("anomalies", []),
+        "unresolved_issues": state.get("unresolved_issues", []),
+        "all_resolved": report_analysis_service.all_resolved(request),
+    }
+
+
+@router.post("/{request_id}/reference-file")
+def submit_reference_file(
+    request_id: int,
+    linked_anomaly_id: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Submit a supplementary file (e.g. a production extract) to resolve
+    an open unknown-code anomaly. Cross-references it against the
+    primary upload and either resolves the anomaly automatically or
+    turns it into a conflict that needs an update/ignore decision.
+    """
+    request = _get_request_or_404(db, request_id)
+
+    try:
+        result = report_analysis_service.record_reference_file(
+            db,
+            request,
+            uploaded_by_user_id=current_user.id,
+            original_filename=file.filename,
+            file_bytes=file.file.read(),
+            linked_anomaly_id=linked_anomaly_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    state = report_analysis_service.get_analysis_state(request)
+    summary = report_analysis_service.build_anomaly_summary_message(state)
+
+    conversation = []
+    if request.conversation:
+        try:
+            conversation = json.loads(request.conversation)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            conversation = []
+    conversation.append({
+        "sender": "ai",
+        "text": summary,
+        "timestamp": datetime.now().isoformat(),
+    })
+    request.conversation = json.dumps(conversation)
+    db.commit()
+
+    return {
+        "request_id": request_id,
+        "anomaly": result["anomaly"],
+        "current_stage": request.current_stage,
+        "ai_response": summary,
+        "conversation": conversation,
+        "all_resolved": report_analysis_service.all_resolved(request),
+    }
+
+
+class DecisionBody(BaseModel):
+    anomaly_id: str
+    decision: str
+
+
+@router.post("/{request_id}/decision")
+def submit_conflict_decision(
+    request_id: int,
+    body: DecisionBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Record the user's update-vs-ignore decision for a conflict anomaly.
+    """
+    request = _get_request_or_404(db, request_id)
+
+    try:
+        result = report_analysis_service.record_decision(
+            db, request, anomaly_id=body.anomaly_id, decision=body.decision,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    ai_text = (
+        f"Got it — I'll {body.decision} that record."
+        + (" Everything is resolved now, ready to generate the script." if result["all_resolved"] else "")
+    )
+
+    conversation = []
+    if request.conversation:
+        try:
+            conversation = json.loads(request.conversation)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            conversation = []
+    conversation.append({
+        "sender": "ai",
+        "text": ai_text,
+        "timestamp": datetime.now().isoformat(),
+    })
+    request.conversation = json.dumps(conversation)
+    db.commit()
+
+    return {
+        "request_id": request_id,
+        "anomaly": result["anomaly"],
+        "all_resolved": result["all_resolved"],
+        "current_stage": request.current_stage,
+        "ai_response": ai_text,
+        "conversation": conversation,
+    }
+
+
+@router.post("/{request_id}/generate-script")
+def generate_report_script(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Generate the SQL script for a report analysis request, once every
+    anomaly has been resolved.
+    """
+    request = _get_request_or_404(db, request_id)
+
+    if not report_analysis_service.all_resolved(request):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Every anomaly must be resolved before the script can be generated.",
+        )
+
+    task = db.query(ConfigurationTask).filter(ConfigurationTask.id == request.task_id).first()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found.")
+
+    try:
+        script_text, row_count = report_analysis_service.generate_sql_script(db, request, task)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    version = report_analysis_service.save_script_version(
+        db, request, script_text, row_count, generated_by_user_id=current_user.id,
+    )
+    report_analysis_service.advance_stage(db, request, "script_generated")
+
+    return {
+        "request_id": request_id,
+        "generated_script": script_text,
+        "row_count": row_count,
+        "version_number": version.version_number,
+        "current_stage": request.current_stage,
+    }
+
+
+@router.get("/{request_id}/script-versions")
+def list_script_versions(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """History of every SQL script generated for this request."""
+    _get_request_or_404(db, request_id)
+
+    versions = (
+        db.query(ReportScriptVersion)
+        .filter(ReportScriptVersion.request_id == request_id)
+        .order_by(ReportScriptVersion.version_number.desc())
+        .all()
+    )
+
+    return {
+        "request_id": request_id,
+        "versions": [
+            {
+                "version_number": v.version_number,
+                "script_text": v.script_text,
+                "row_count": v.row_count,
+                "generated_at": v.generated_at,
+            }
+            for v in versions
+        ],
     }

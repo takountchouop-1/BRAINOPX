@@ -1,5 +1,6 @@
 import React from 'react'
 import { Box, Pagination, Select, MenuItem, Typography, Stack } from '@mui/material'
+import { useTranslation } from 'react-i18next'
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50]
 
@@ -54,8 +55,10 @@ const PaginationBar = ({
   onPageChange,
   onPageSizeChange,
   pageSizeOptions = PAGE_SIZE_OPTIONS,
-  recordLabel = 'records',
+  recordLabel,
 }) => {
+  const { t } = useTranslation('components')
+  const effectiveRecordLabel = recordLabel || t('paginationBar.records')
   const pageCount = Math.max(1, Math.ceil(totalRecords / pageSize))
 
   if (totalRecords === 0) {
@@ -85,7 +88,7 @@ const PaginationBar = ({
           if (item.type === 'previous') {
             return (
               <Box component="button" type="button" disabled={item.disabled} onClick={item.onClick} sx={navButtonSx}>
-                « Prev
+                {t('paginationBar.prev')}
               </Box>
             )
           }
@@ -93,7 +96,7 @@ const PaginationBar = ({
           if (item.type === 'next') {
             return (
               <Box component="button" type="button" disabled={item.disabled} onClick={item.onClick} sx={navButtonSx}>
-                Next »
+                {t('paginationBar.next')}
               </Box>
             )
           }
@@ -143,7 +146,7 @@ const PaginationBar = ({
 
       <Stack direction="row" alignItems="center" spacing={2}>
         <Typography variant="body2" sx={{ color: 'text.secondary', whiteSpace: 'nowrap' }}>
-          {totalRecords} {recordLabel}
+          {totalRecords} {effectiveRecordLabel}
         </Typography>
 
         <Select
@@ -154,7 +157,7 @@ const PaginationBar = ({
         >
           {pageSizeOptions.map((size) => (
             <MenuItem key={size} value={size} sx={{ fontSize: 13 }}>
-              {size} per page
+              {t('paginationBar.perPage', { size })}
             </MenuItem>
           ))}
         </Select>

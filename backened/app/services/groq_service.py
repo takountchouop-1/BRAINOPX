@@ -39,7 +39,20 @@ Architecture:
   +------+-----------------------+
          |
          v
-   COMPLETE CURRENT RULE
+   HARD-VALID USER INPUT
+         |
+         v
+   SOFT CHECKS (deterministic, same authority as above)
+     - narrative rule missing a required_topic -> NEEDS_MORE_INFO
+       (stay on the SAME step, ask for exactly what's missing,
+        not counted as a failed attempt)
+     - value matches the rule's warning_condition -> WARNING
+       (present the risk, ask the user to accept or decline
+        before advancing)
+     - otherwise -> PASSED
+         |
+         v
+   COMPLETE CURRENT RULE (PASSED, or WARNING once accepted)
          |
          v
    MOVE TO NEXT RULE
@@ -47,15 +60,23 @@ Architecture:
 IMPORTANT:
 
 - Groq generates examples/explanations only.
-- Python deterministic validation is authoritative.
-- AI cannot decide whether user input is valid.
-- AI cannot modify rule constraints.
-- A failed input never advances the task.
+- Python deterministic validation is authoritative — for hard
+  pass/fail AND for the softer WARNING/NEEDS_MORE_INFO outcomes.
+- AI cannot decide whether user input is valid, risky, or
+  incomplete.
+- AI cannot modify rule constraints, warning_condition, or
+  required_topics.
+- A failed input never advances the task. A WARNING only advances
+  once the user explicitly accepts it. A NEEDS_MORE_INFO never
+  counts as a failed attempt.
 - The same validation engine is used for:
     * AI examples
     * user input
     * deterministic fallback
 - Rules are normalized so future tasks use the same logic.
+- warning_condition/warning_message and required_topics are
+  optional, parser-inferred fields — a rule without them behaves
+  exactly as it always has (PASSED/FAILED only).
 """
 
 import copy
@@ -68,7 +89,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from dotenv import load_dotenv
-from openai import OpenAI, RateLimitError
+from openai import APIConnectionError, OpenAI, RateLimitError
 
 from .sql_constraint_parser import extract_rules_from_sql
 
@@ -81,11 +102,11 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 GROQ_MODEL = os.getenv(
-    "GROQ_MODEL",
-    "openai/gpt-oss-120b",
+    "DEEPSEEK_MODEL",
+    "deepseek-chat",
 )
 
 MAX_RETRIES = int(
@@ -101,8 +122,8 @@ MAX_RETRIES = int(
 # ============================================================
 
 client = OpenAI(
-    api_key=GROQ_API_KEY,
-    base_url="https://api.groq.com/openai/v1",
+    api_key=DEEPSEEK_API_KEY,
+    base_url="https://api.deepseek.com",
 )
 
 
@@ -260,12 +281,21 @@ BR1234
 
 is valid.
 
+The "explanation" field is shown directly to the end user next to
+the example, so they can construct their OWN valid values afterwards
+instead of only copying the one example given. It must describe the
+GENERAL pattern, not just why this one value happens to be valid:
+state the prefix/suffix/length/allowed values/format/range that any
+correct answer must follow, in one or two plain sentences a
+non-technical user can act on. "TRF followed by 3 digits" is
+comprehensive; "This satisfies the rule" is not.
+
 Return ONLY JSON:
 
 {
   "rule_understood": true,
   "example": "ONE_CONCRETE_VALUE",
-  "explanation": "Short explanation.",
+  "explanation": "Plain-language description of the general format every valid value must follow.",
   "constraints": [
     "constraint 1",
     "constraint 2"
@@ -353,6 +383,15 @@ def _rate_limit_wait_seconds(
     return default
 
 
+class GroqNetworkError(RuntimeError):
+    """
+    Groq could not be reached at all — no internet, a DNS failure, or
+    a dropped connection — as opposed to Groq responding with an
+    error. Callers catch this specifically so the user is told to
+    check their connection rather than getting a generic failure.
+    """
+
+
 def _call_groq(
     system_prompt: str,
     user_prompt: str,
@@ -371,9 +410,9 @@ def _call_groq(
     "Groq returned an empty response" failures this guards against.
     """
 
-    if not GROQ_API_KEY:
+    if not DEEPSEEK_API_KEY:
         raise RuntimeError(
-            "GROQ_API_KEY is not configured."
+            "DEEPSEEK_API_KEY is not configured."
         )
 
     messages = [
@@ -404,11 +443,6 @@ def _call_groq(
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             }
-            # reasoning_effort is only supported by gpt-oss models on Groq;
-            # other models (e.g. llama-3.1-8b-instant) reject the param.
-            if "gpt-oss" in GROQ_MODEL:
-                create_kwargs["reasoning_effort"] = reasoning_effort
-
             response = client.chat.completions.create(**create_kwargs)
             break
 
@@ -427,6 +461,12 @@ def _call_groq(
             )
 
             time.sleep(wait_seconds)
+
+        except APIConnectionError as exc:
+
+            raise GroqNetworkError(
+                "Could not reach Groq — check your internet connection."
+            ) from exc
 
     if not response.choices:
         raise RuntimeError(
@@ -1861,7 +1901,16 @@ def _infer_text_constraints(
     # example builder can offer a sentence instead of a code.
     # ========================================================
 
-    if _looks_like_narrative(rule, constraints):
+    # A rule the parser explicitly shaped as "narrative" (composite_rules'
+    # input_shape, set from the RULES PARSER PROMPT's INPUT SHAPE section)
+    # is narrative regardless of what _looks_like_narrative's separate
+    # text heuristic concludes — that heuristic exists for text that
+    # never got an explicit shape at all, not to overrule one that did.
+    declared_narrative = (
+        str(rule.get("input_shape") or "").strip().lower() == "narrative"
+    )
+
+    if declared_narrative or _looks_like_narrative(rule, constraints):
         constraints["content_type"] = "narrative"
         constraints.setdefault("min_words", 3)
 
@@ -2074,12 +2123,18 @@ CRITICAL INSTRUCTIONS:
 4. Do NOT invent new constraints.
    Do NOT change existing constraints.
 
+5. The "explanation" is shown to the end user next to the example so
+   they can build their own valid values, not just copy this one.
+   Describe the general format (prefix/suffix/length/allowed values/
+   pattern, as applicable) in one or two plain sentences — not just
+   why this specific value passes.
+
 Return ONLY JSON:
 
 {{
   "rule_understood": true,
   "example": "one concrete value",
-  "explanation": "short explanation of why this value satisfies the rule",
+  "explanation": "plain-language description of the general format every valid value must follow",
   "constraints": [
     "constraint 1",
     "constraint 2"
@@ -2154,6 +2209,133 @@ Return ONLY JSON:
         "raw_response": raw_response,
         "error": None,
     }
+
+
+# ============================================================
+# WARNING CONDITION / REQUIRED TOPICS
+#
+# Two soft checks layered on top of the hard pass/fail validation
+# above. Both are opt-in: a rule that carries neither field behaves
+# exactly as before, so no existing task changes behavior.
+# ============================================================
+
+def _matches_warning_condition(value: str, warning_condition: dict) -> bool:
+    """
+    Whether a value that already passed hard validation still matches
+    a rule's optional soft "warn, but allow" condition.
+
+    Every key present in `warning_condition` must match (AND), the
+    same combination semantics `constraints` already uses for hard
+    validation — just evaluated as "does it match" rather than "does
+    it violate".
+    """
+
+    if not isinstance(warning_condition, dict) or not warning_condition:
+        return False
+
+    checks_present = False
+
+    pattern = warning_condition.get("pattern") or warning_condition.get("regex")
+    if pattern:
+        checks_present = True
+        try:
+            if not re.fullmatch(str(pattern), value):
+                return False
+        except re.error:
+            return False
+
+    allowed_values = warning_condition.get("allowed_values")
+    if allowed_values:
+        checks_present = True
+        normalized = {str(v).strip().lower() for v in allowed_values}
+        if value.strip().lower() not in normalized:
+            return False
+
+    prefix = warning_condition.get("prefix")
+    if prefix:
+        checks_present = True
+        if not value.startswith(str(prefix)):
+            return False
+
+    suffix = warning_condition.get("suffix")
+    if suffix:
+        checks_present = True
+        if not value.endswith(str(suffix)):
+            return False
+
+    domain = warning_condition.get("domain")
+    if domain:
+        checks_present = True
+        if "@" not in value:
+            return False
+        actual_domain = value.split("@", 1)[1].strip().lower()
+        expected_domain = str(domain).strip().lower().lstrip("@")
+        if actual_domain != expected_domain:
+            return False
+
+    forbidden_domains = warning_condition.get("forbidden_domains")
+    if forbidden_domains:
+        checks_present = True
+        if "@" not in value:
+            return False
+        actual_domain = value.split("@", 1)[1].strip().lower()
+        normalized = {
+            str(d).strip().lower().lstrip("@")
+            for d in forbidden_domains
+        }
+        if actual_domain not in normalized:
+            return False
+
+    for length_key, compare in (
+        ("exact_length", lambda n: len(value) == n),
+        ("min_length", lambda n: len(value) >= n),
+        ("max_length", lambda n: len(value) <= n),
+    ):
+        bound = warning_condition.get(length_key)
+        if bound is not None:
+            checks_present = True
+            try:
+                if not compare(int(bound)):
+                    return False
+            except (TypeError, ValueError):
+                return False
+
+    min_value = warning_condition.get("min_value")
+    max_value = warning_condition.get("max_value")
+    if min_value is not None or max_value is not None:
+        checks_present = True
+        try:
+            numeric_value = float(value)
+        except ValueError:
+            return False
+        if min_value is not None and numeric_value < float(min_value):
+            return False
+        if max_value is not None and numeric_value > float(max_value):
+            return False
+
+    return checks_present
+
+
+def _missing_required_topics(value: str, required_topics: list) -> list[str]:
+    """
+    Which of a narrative rule's declared required topics the
+    submitted text does not mention.
+
+    A plain, case-insensitive substring check — the same spirit as
+    the rest of this file's deterministic checks, no AI judgement.
+    """
+
+    if not required_topics:
+        return []
+
+    lower_value = value.lower()
+
+    return [
+        str(topic)
+        for topic in required_topics
+        if str(topic).strip()
+        and str(topic).strip().lower() not in lower_value
+    ]
 
 
 # ============================================================
@@ -2270,6 +2452,9 @@ def deterministic_validate_example(
             "errors": [
                 "A value is required."
             ],
+            "warning": False,
+            "warning_reason": "",
+            "missing_topics": [],
         }
 
     if not value:
@@ -2278,6 +2463,9 @@ def deterministic_validate_example(
             "valid": True,
             "reason": "No value is required.",
             "errors": [],
+            "warning": False,
+            "warning_reason": "",
+            "missing_topics": [],
         }
 
     # ========================================================
@@ -2291,10 +2479,29 @@ def deterministic_validate_example(
 
     # ========================================================
     # GENERIC PLACEHOLDERS
+    #
+    # The list includes every single letter ("a".."z") to catch lazy
+    # keyboard filler in ordinary text fields. A field whose own rule
+    # calls for exactly this many characters (a 1-character code
+    # column, say) is not filler just because it is short — skip the
+    # check rather than reject every legitimate answer such a field
+    # can ever have.
     # ========================================================
 
+    field_width = (
+        constraints.get("exact_length")
+        if constraints.get("exact_length") is not None
+        else constraints.get("max_length")
+    )
+
+    placeholder_check_applies = not (
+        isinstance(field_width, int)
+        and field_width == len(value)
+    )
+
     if (
-        value.lower()
+        placeholder_check_applies
+        and value.lower()
         in GENERIC_PLACEHOLDERS
     ):
         errors.append(
@@ -2330,7 +2537,8 @@ def deterministic_validate_example(
     )
 
     if (
-        (len(value) <= 3 or has_punctuation)
+        placeholder_check_applies
+        and (len(value) <= 3 or has_punctuation)
         and value.upper() not in allowed_normalized
         and value.lower() not in allowed_normalized
     ):
@@ -3487,7 +3695,42 @@ def deterministic_validate_example(
                 unique_errors
             ),
             "errors": unique_errors,
+            "warning": False,
+            "warning_reason": "",
+            "missing_topics": [],
         }
+
+    # ========================================================
+    # SOFT CHECKS (only reached once the value is hard-valid)
+    # ========================================================
+
+    warning_condition = (
+        rule.get("warning_condition")
+        or constraints.get("warning_condition")
+    )
+
+    is_warning = bool(
+        warning_condition
+        and _matches_warning_condition(value, warning_condition)
+    )
+
+    warning_reason = (
+        str(
+            rule.get("warning_message")
+            or constraints.get("warning_message")
+            or ""
+        ).strip()
+        if is_warning
+        else ""
+    )
+
+    missing_topics = []
+
+    if constraints.get("content_type") == "narrative":
+        missing_topics = _missing_required_topics(
+            value,
+            rule.get("required_topics") or [],
+        )
 
     return {
         "valid": True,
@@ -3495,6 +3738,9 @@ def deterministic_validate_example(
             "Value satisfies all rule constraints."
         ),
         "errors": [],
+        "warning": is_warning,
+        "warning_reason": warning_reason,
+        "missing_topics": missing_topics,
     }
 
 
@@ -3768,6 +4014,14 @@ def generate_rule_example_with_retry(
         int(retries),
     )
 
+    # Every call generates a fresh example via Groq — no cache reuse.
+    # This is deliberate: an offline run must not be able to complete
+    # a step off a previously-cached example (see
+    # validate_user_input_with_groq below, which removes the other
+    # half of that offline path — deterministic validation of what the
+    # user actually typed).
+    effective_constraints = _get_effective_constraints(rule)
+
     previous_example = None
     validation_feedback = None
 
@@ -3950,6 +4204,125 @@ def generate_rule_example_with_retry(
 
 
 # ============================================================
+# LIVE USER-INPUT VALIDATION
+# ============================================================
+
+RULE_INPUT_VALIDATION_SYSTEM_PROMPT = """
+You are the BRAINOPX Rule Input Validator.
+
+Your job is to judge whether ONE user-submitted value satisfies ONE
+business rule.
+
+The supplied rule is authoritative. Check the submitted value against
+every structured constraint listed, and against the rule's name,
+description, task and expected outcome.
+
+Return ONLY JSON:
+
+{
+  "valid": true or false,
+  "reason": "one short sentence",
+  "errors": ["what's wrong with the value, only if invalid"],
+  "warning": false,
+  "warning_reason": "",
+  "missing_topics": []
+}
+
+"warning" is true only when the value is technically valid but risky
+or unusual for this rule. "missing_topics" lists narrative topics the
+rule expects that the value hasn't covered yet — only when the value
+is otherwise valid.
+"""
+
+
+def validate_user_input_with_groq(
+    user_input: str,
+    rule: dict,
+) -> dict:
+    """
+    Ask Groq to judge whether user_input satisfies the rule.
+
+    Used in place of deterministic_validate_example for what the user
+    actually typed: every submission spends a live Groq call, on
+    purpose, so a step cannot be passed without a live call to Groq.
+    (deterministic_validate_example is still used to self-check an
+    AI-generated example, which is a separate internal consistency
+    check, not the user's answer.)
+    """
+
+    value = str(user_input or "").strip()
+
+    effective_constraints = _get_effective_constraints(rule)
+
+    required = effective_constraints.get("required", True)
+
+    if required and not value:
+        return {
+            "valid": False,
+            "reason": "A value is required.",
+            "errors": ["A value is required."],
+            "warning": False,
+            "warning_reason": "",
+            "missing_topics": [],
+        }
+
+    if not value:
+        return {
+            "valid": True,
+            "reason": "No value is required.",
+            "errors": [],
+            "warning": False,
+            "warning_reason": "",
+            "missing_topics": [],
+        }
+
+    complete_rule = _build_complete_rule_text(
+        {**rule, "constraints": effective_constraints}
+    )
+
+    user_prompt = f"""
+Judge this submitted value against the rule below.
+
+{complete_rule}
+
+SUBMITTED VALUE:
+{value}
+"""
+
+    raw_response = _call_groq(
+        system_prompt=RULE_INPUT_VALIDATION_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        temperature=0.0,
+        max_tokens=500,
+    )
+
+    parsed = _extract_json(raw_response)
+
+    if not isinstance(parsed, dict):
+        return {
+            "valid": False,
+            "reason": "Could not validate this value right now.",
+            "errors": ["Could not validate this value right now."],
+            "warning": False,
+            "warning_reason": "",
+            "missing_topics": [],
+        }
+
+    return {
+        "valid": bool(parsed.get("valid", False)),
+        "reason": str(parsed.get("reason") or "").strip(),
+        "errors": [
+            str(e).strip() for e in (parsed.get("errors") or []) if str(e).strip()
+        ],
+        "warning": bool(parsed.get("warning", False)),
+        "warning_reason": str(parsed.get("warning_reason") or "").strip(),
+        "missing_topics": [
+            str(t).strip() for t in (parsed.get("missing_topics") or []) if str(t).strip()
+        ],
+    }
+
+
+# ============================================================
 # RUN ONE RULE WORKFLOW
 # ============================================================
 
@@ -3996,6 +4369,9 @@ def run_rule_workflow(
             "status": "failed",
             "passed": False,
             "validated": False,
+            "warning": False,
+            "warning_reason": "",
+            "missing_topics": [],
             "example": "",
             "user_input": str(
                 user_input or ""
@@ -4116,8 +4492,8 @@ def run_rule_workflow(
     else:
 
         user_validation = (
-            deterministic_validate_example(
-                example=clean_input,
+            validate_user_input_with_groq(
+                user_input=clean_input,
                 rule=effective_rule,
             )
         )
@@ -4140,7 +4516,34 @@ def run_rule_workflow(
         )
     ).strip()
 
-    if passed:
+    # A value that is hard-valid can still carry a soft outcome:
+    # missing narrative topics take priority over a mere warning,
+    # since the value is incomplete rather than merely risky.
+
+    missing_topics = (
+        user_validation.get("missing_topics", [])
+        if passed
+        else []
+    )
+
+    is_warning = bool(
+        user_validation.get("warning")
+    ) if passed else False
+
+    warning_reason = str(
+        user_validation.get("warning_reason", "")
+    ).strip() if is_warning else ""
+
+    if passed and missing_topics:
+        fine_status = "needs_more_info"
+    elif passed and is_warning:
+        fine_status = "warning"
+    elif passed:
+        fine_status = "passed"
+    else:
+        fine_status = "failed"
+
+    if fine_status == "passed":
 
         guidance = (
             "Rule completed successfully."
@@ -4148,6 +4551,38 @@ def run_rule_workflow(
 
         next_action = (
             "Proceed to the next rule."
+        )
+
+    elif fine_status == "needs_more_info":
+
+        guidance = (
+            "Almost there for "
+            + rule_name
+            + " — please also address: "
+            + ", ".join(missing_topics)
+        )
+
+        next_action = (
+            "Please add the missing information for "
+            + rule_name
+            + "."
+        )
+
+    elif fine_status == "warning":
+
+        guidance = (
+            warning_reason
+            or (
+                "This value is accepted but carries a risk for "
+                + rule_name
+                + "."
+            )
+        )
+
+        next_action = (
+            "Confirm whether to continue with this value for "
+            + rule_name
+            + "."
         )
 
     else:
@@ -4200,15 +4635,17 @@ def run_rule_workflow(
 
         "rule_name": rule_name,
 
-        "status": (
-            "passed"
-            if passed
-            else "failed"
-        ),
+        "status": fine_status,
 
         "passed": passed,
 
         "validated": passed,
+
+        "warning": is_warning,
+
+        "warning_reason": warning_reason,
+
+        "missing_topics": missing_topics,
 
         "user_input": clean_input,
 
@@ -4256,11 +4693,12 @@ def run_rule_workflow(
             )
         ),
 
-        "summary": (
-            f"'{rule_name}' passed."
-            if passed
-            else f"'{rule_name}' requires correction."
-        ),
+        "summary": {
+            "passed": f"'{rule_name}' passed.",
+            "warning": f"'{rule_name}' passed with a warning.",
+            "needs_more_info": f"'{rule_name}' needs more information.",
+            "failed": f"'{rule_name}' requires correction.",
+        }[fine_status],
 
         "questions": [
             f"Please provide your value for {rule_name}."
@@ -4700,6 +5138,47 @@ conditions. Do NOT invent format constraints for these.
 
 Use "scalar" for everything else.
 
+WARNING CONDITION (optional — most rules do not have one)
+
+Some source text describes a value that is not wrong, but risky
+or discouraged — language like "should", "recommended",
+"preferably", "avoid using X if possible", "warn the user if...
+but allow it". Only for those rules, add "warning_condition" and
+"warning_message" (one plain sentence explaining the risk to the
+end user). "warning_condition" MUST use only these keys — do not
+invent others, they will be silently ignored:
+
+  "pattern" / "regex"     value matches this regex
+  "allowed_values"        value is one of this list
+  "prefix" / "suffix"     value starts/ends with this
+  "exact_length" / "min_length" / "max_length"
+  "min_value" / "max_value"
+  "domain"                for an email value, its domain is this
+  "forbidden_domains"     for an email value, its domain is in this list
+
+{
+  "id": 7,
+  "name": "Discount Percentage",
+  "description": "A number between 0 and 100. Discounts above 50
+                  should be used with caution.",
+  "constraints": {"required": true, "min_value": 0, "max_value": 100},
+  "warning_condition": {"min_value": 50, "max_value": 100},
+  "warning_message": "A discount above 50% is unusual — confirm this is intentional."
+}
+
+Do NOT add "warning_condition" unless the source text clearly
+names a specific risky/discouraged sub-case. A rule that is
+simply optional or has a wide valid range does not need one.
+
+REQUIRED TOPICS (optional, "narrative" rules only)
+
+When the source text for a "narrative" rule explicitly lists
+what the written section MUST cover — "must address the budget,
+timeline and risks", "should include X, Y and Z" — add
+"required_topics": an array of those short topic phrases, in the
+source text's own words. Leave it out when the text does not
+name specific required topics.
+
 Return ONLY JSON.
 """
 
@@ -4830,6 +5309,31 @@ def _normalize_parsed_rule(rule: dict, index: int) -> dict:
                 )
             except (TypeError, ValueError):
                 pass
+
+    # ----------------------------------------------------
+    # Optional soft-outcome metadata: a risky-but-allowed value
+    # (warning_condition/warning_message), or the topics a
+    # narrative section must cover (required_topics). Absent on
+    # most rules — carried through only when the parser found
+    # them, exactly like columns/item_rule above.
+    # ----------------------------------------------------
+
+    warning_condition = rule.get("warning_condition")
+
+    if isinstance(warning_condition, dict) and warning_condition:
+        normalized_rule["warning_condition"] = copy.deepcopy(warning_condition)
+        normalized_rule["warning_message"] = str(
+            rule.get("warning_message", "")
+        ).strip()
+
+    required_topics = rule.get("required_topics")
+
+    if isinstance(required_topics, list) and required_topics:
+        normalized_rule["required_topics"] = [
+            str(topic).strip()
+            for topic in required_topics
+            if str(topic).strip()
+        ]
 
     # ----------------------------------------------------
     # Add inferred constraints as safety metadata.
@@ -5481,6 +5985,17 @@ def parse_rules_to_json(
 # GENERAL AI RESPONSE
 # ============================================================
 
+def _language_suffix(language: str) -> str:
+    """
+    Appended to a system prompt to make the model reply in the user's
+    chosen UI language. Empty for English so the default prompt text
+    (and behavior) is unchanged.
+    """
+    if language == "fr":
+        return "\n\nAlways respond in French (Français), regardless of the language of this system prompt or of the user's message."
+    return ""
+
+
 def get_ai_response(
     task_name: str,
     validation_errors: list[dict],
@@ -5491,6 +6006,7 @@ def get_ai_response(
         list[dict]
     ] = None,
     mode: str = "validation",
+    language: str = "en",
 ) -> str:
     """
     General BRAINOPX assistant.
@@ -5615,7 +6131,7 @@ Ask one question at a time.
 """
 
     return _call_groq(
-        system_prompt=system_prompt,
+        system_prompt=system_prompt + _language_suffix(language),
         user_prompt=context,
         temperature=0.2,
         max_tokens=700,
@@ -5655,6 +6171,23 @@ Formatting:
   '#'/'##' markdown-style headings and bulleted ('- ') or numbered
   ('1. ') lists rather than one long paragraph, so it renders clearly
   and can be exported to PDF/Word cleanly.
+- When the information is naturally tabular (rows of comparable items,
+  a list of columns/rules/values, counts or statuses broken down by
+  category, a side-by-side comparison, etc.) or when the user explicitly
+  asks for a table, present it as a markdown pipe table: a header row,
+  a '|---|---|' separator row, then one data row per line, e.g.
+  "| Column | Type |\n|---|---|\n| id | integer |". Do not describe
+  tabular data as prose when a table would show it more clearly.
+- When the user asks for a step-by-step guide, a walkthrough, a
+  procedure, or "how do I ..." instructions, format every step as one
+  line in a numbered list: a short **Bold Title** (two to four words),
+  then " — ", then one concise sentence explaining that step. Example:
+  "1. **Keyword Research** — Finding the right keywords helps target
+  your audience and improve search rankings." Keep every step in the
+  list to exactly that shape (bold title, em dash, one sentence) with
+  no sub-bullets underneath — the interface renders this exact pattern
+  as illustrated step cards, and a step missing the bold title or the
+  dash falls back to a plain numbered line instead.
 
 Rules:
 - Use ONLY the information supplied to you in this conversation. Never
@@ -5689,6 +6222,7 @@ def get_assistant_chat_response(
     conversation_history: list[dict],
     task_context: Optional[str] = None,
     extra_context: Optional[str] = None,
+    language: str = "en",
 ) -> str:
     """
     General-purpose conversational reply for the sidebar AI assistant.
@@ -5725,12 +6259,150 @@ def get_assistant_chat_response(
     context += f"USER MESSAGE:\n{user_message}"
 
     return _call_groq(
-        system_prompt=ASSISTANT_SYSTEM_PROMPT,
+        system_prompt=ASSISTANT_SYSTEM_PROMPT + _language_suffix(language),
         user_prompt=context,
         temperature=0.4,
         max_tokens=1400,
         reasoning_effort="medium",
     )
+
+
+# ============================================================
+# FOLLOW-UP SUGGESTIONS
+# ============================================================
+
+ASSISTANT_FOLLOWUP_SYSTEM_PROMPT = """
+You suggest short follow-up messages for a chat assistant on BRAINOPX, a
+business-configuration platform (tasks, configuration requests, rules,
+reports).
+
+Given the assistant's reply that was just shown to the user, propose up to 3
+short, concrete things the user might naturally want to ask or do next. Each
+suggestion must be phrased as something the USER would type (first person or
+imperative), not a description of the reply.
+
+Rules:
+- 3 to 5 words each, no punctuation at the end.
+- Specific to what was just discussed, never generic ("tell me more").
+- Do not repeat the question the user just asked.
+- If the reply already fully closes the topic and no sensible follow-up
+  exists (e.g. a plain greeting, a refusal, an off-topic redirect), return
+  an empty list.
+
+Return ONLY JSON: {"suggestions": ["...", "...", "..."]}
+"""
+
+
+def get_assistant_followup_suggestions(
+    user_message: str,
+    assistant_reply: str,
+    language: str = "en",
+) -> list[str]:
+    """
+    Short follow-up chips shown once a chat turn finishes, so the user can
+    continue the conversation with one click instead of typing.
+
+    Best-effort: any failure (Groq error, malformed JSON) yields an empty
+    list rather than surfacing an error, since these chips are a convenience
+    on top of a reply that already succeeded.
+    """
+
+    user_prompt = f"USER ASKED:\n{user_message}\n\nASSISTANT REPLIED:\n{assistant_reply}"
+
+    try:
+        raw_response = _call_groq(
+            system_prompt=ASSISTANT_FOLLOWUP_SYSTEM_PROMPT + _language_suffix(language),
+            user_prompt=user_prompt,
+            temperature=0.4,
+            max_tokens=200,
+            reasoning_effort="low",
+        )
+    except Exception as exc:
+        logger.warning("Could not generate follow-up suggestions: %s", exc)
+        return []
+
+    parsed = _extract_json(raw_response)
+
+    if not isinstance(parsed, dict):
+        return []
+
+    suggestions = parsed.get("suggestions")
+    if not isinstance(suggestions, list):
+        return []
+
+    return [s.strip() for s in suggestions if isinstance(s, str) and s.strip()][:3]
+
+
+# ============================================================
+# ATTACHMENT RELEVANCE CLASSIFICATION
+# ============================================================
+
+DOCUMENT_RELEVANCE_SYSTEM_PROMPT = """
+You are a strict content classifier for BRAINOPX, a business-configuration
+platform.
+
+What BRAINOPX is:
+- Admins define "tasks": an Excel/CSV template, expected columns, and a set
+  of column rules extracted from an uploaded rules document, mapped to a
+  target SQL table.
+- Users submit "configuration requests" against a task, uploading data and
+  being guided step by step through validating it against that task's rules
+  before a script is generated to load it into the target table.
+- Relevant documents include: business/data rule specifications, column or
+  field validation rules, task or process descriptions, configuration data
+  templates (Excel/CSV/table exports), reports or summaries about BRAINOPX
+  tasks/requests, and reference/lookup data used to validate that data.
+
+Your job: decide whether the document excerpt below is plausibly related to
+BRAINOPX in that sense, as opposed to being an unrelated document (e.g. a
+personal resume, an unrelated contract, a novel, marketing material for a
+different product, homework, etc. with no connection to business rules,
+data configuration, or the BRAINOPX platform).
+
+Be lenient: any business, data-governance, process-rule, or structured-data
+document counts as related. Only mark something unrelated when it clearly
+has nothing to do with business rules, data configuration, or BRAINOPX.
+
+Return ONLY JSON: {"related": true} or {"related": false}
+"""
+
+
+def is_document_related_to_brainopx(filename: str, text: str) -> bool:
+    """
+    Whether an uploaded assistant attachment is plausibly related to
+    BRAINOPX, so the assistant may read/summarize/analyze it.
+
+    Fails open (returns True) on any classification error — a Groq hiccup
+    should not block a legitimate upload, and the assistant's own
+    "staying on topic" system-prompt rule still guards the conversation
+    even if an unrelated document slips through here.
+    """
+
+    excerpt = (text or "").strip()
+
+    if not excerpt:
+        return False
+
+    user_prompt = f"FILENAME: {filename}\n\nDOCUMENT EXCERPT:\n{excerpt[:4000]}"
+
+    try:
+        raw_response = _call_groq(
+            system_prompt=DOCUMENT_RELEVANCE_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            temperature=0.0,
+            max_tokens=50,
+            reasoning_effort="low",
+        )
+    except Exception as exc:
+        logger.warning("Could not classify attachment relevance for %r: %s", filename, exc)
+        return True
+
+    parsed = _extract_json(raw_response)
+
+    if isinstance(parsed, dict) and "related" in parsed:
+        return bool(parsed["related"])
+
+    return True
 
 
 # ============================================================
@@ -6118,6 +6790,76 @@ def check_rule_example(
 
 
 # ============================================================
+# WORKFLOW SCRIPT GENERATION
+# ============================================================
+
+_CODE_FENCE_RE = re.compile(r"^```[a-zA-Z0-9_-]*\s*\n|\n?```\s*$")
+
+
+def generate_workflow_script(
+    task_name: str,
+    task_description: str,
+    rules_content: str,
+    completed_steps: list[dict],
+    language: str = "en",
+) -> str:
+    """
+    Synthesizes the script for a completed rules-document walkthrough.
+
+    Unlike report_analyses' generate_sql_script (deterministic, built
+    off a known target_table/column_rules), a rules-document task has
+    no fixed schema — what the script should even look like (SQL,
+    a config file, ...) depends on the rules document itself. So this
+    asks Groq to infer the right shape from the rules document and
+    task description, then apply the values the user actually
+    submitted for each rule.
+    """
+
+    if not DEEPSEEK_API_KEY:
+        raise RuntimeError("DEEPSEEK_API_KEY is not configured.")
+
+    answer_lines = []
+    for i, step in enumerate(completed_steps):
+        name = step.get("rule_name") or f"Step {step.get('step_index', i)}"
+        value = step.get("user_value") or "(no value)"
+        answer_lines.append(f"- {name}: {value}")
+    answers = "\n".join(answer_lines)
+
+    system_prompt = (
+        "You are BRAINOPX's configuration script generator. You are given "
+        "a task's rules document and the value a user supplied for every "
+        "rule in it, once their walkthrough is finished. Infer the correct "
+        "script format from the rules document and task description (SQL "
+        "statements, a config file, a shell script, etc.) and produce the "
+        "final script that applies the submitted values. "
+        "Output ONLY the script itself — no explanation, no markdown code "
+        "fences, no commentary before or after it."
+    )
+
+    user_prompt = f"""TASK: {task_name}
+DESCRIPTION: {task_description or "(none provided)"}
+
+RULES DOCUMENT:
+{(rules_content or "(none provided)")[:12000]}
+
+VALUES SUBMITTED FOR EACH RULE:
+{answers or "(no completed steps recorded)"}
+
+Write any comments in this language: {language}
+"""
+
+    script = _call_groq(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        temperature=0.2,
+        max_tokens=2500,
+        reasoning_effort="low",
+    )
+
+    return _CODE_FENCE_RE.sub("", script or "").strip()
+
+
+# ============================================================
 # MODULE EXPORTS
 # ============================================================
 
@@ -6133,4 +6875,5 @@ __all__ = [
     "get_ai_response",
     "route_message_to_rule",
     "check_rule_example",
+    "generate_workflow_script",
 ]

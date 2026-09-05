@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   Alert,
   Box,
@@ -68,15 +69,15 @@ const ExpandMoreIcon = ExpandMoreIconImport?.default || ExpandMoreIconImport
 
 const ATTACHMENT_ACCEPT = '.pdf,.docx,.doc,.txt,.xlsx,.xls,.csv'
 
-const formatFileSize = (bytes) => {
+const formatFileSize = (bytes, t) => {
   if (!bytes && bytes !== 0) return ''
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  if (bytes < 1024) return t('aiAssistant.fileSizeBytes', { size: bytes })
+  if (bytes < 1024 * 1024) return t('aiAssistant.fileSizeKB', { size: (bytes / 1024).toFixed(1) })
+  return t('aiAssistant.fileSizeMB', { size: (bytes / (1024 * 1024)).toFixed(1) })
 }
 
 // "Today" / "Yesterday" / a full date — used to separate message groups by day.
-const dayLabelFor = (timestamp) => {
+const dayLabelFor = (timestamp, t) => {
   const date = new Date(timestamp)
   if (Number.isNaN(date.getTime())) return ''
 
@@ -85,36 +86,33 @@ const dayLabelFor = (timestamp) => {
   const target = startOfDay(date)
   const diffDays = Math.round((today - target) / 86400000)
 
-  if (diffDays === 0) return 'Today'
-  if (diffDays === 1) return 'Yesterday'
+  if (diffDays === 0) return t('aiAssistant.today')
+  if (diffDays === 1) return t('aiAssistant.yesterday')
   return date.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
 }
 
-const SUGGESTIONS = [
-  'What can you help me with?',
-  'How do configuration requests work?',
-  'Summarise this task',
-  'Review the requests submitted for this task',
-]
-
-const greetingFor = (hour) => {
-  if (hour < 12) return 'Good Morning'
-  if (hour < 18) return 'Good Afternoon'
-  return 'Good Evening'
+const greetingKeyFor = (hour) => {
+  if (hour < 12) return 'aiAssistant.greetingMorning'
+  if (hour < 18) return 'aiAssistant.greetingAfternoon'
+  return 'aiAssistant.greetingEvening'
 }
 
-const CONTEXT_CATEGORY_META = {
-  report_analyses: { label: 'Report' },
-  skill_engine: { label: 'Skill Engine' },
-}
 const CONTEXT_PREVIEW_COUNT = 3
 
 // ─── PAGE ────────────────────────────────────────────────────────────────────
 
 const AiAssistant = () => {
+  const { t } = useTranslation('pages')
   const { user } = useAuth()
 
-  const firstName = (user?.full_name || 'there').split(' ')[0]
+  const SUGGESTIONS = t('aiAssistant.suggestions', { returnObjects: true })
+
+  const CONTEXT_CATEGORY_META = {
+    report_analyses: { label: t('aiAssistant.contextCategoryReport') },
+    skill_engine: { label: t('aiAssistant.contextCategorySkillEngine') },
+  }
+
+  const firstName = (user?.full_name || t('aiAssistant.firstNameFallback')).split(' ')[0]
 
   const [conversations, setConversations] = useState([])
   const [conversationId, setConversationId] = useState(null)
@@ -209,7 +207,7 @@ const AiAssistant = () => {
   }
 
   const filteredConversations = conversations.filter((conversation) => {
-    const label = (conversation.title || conversation.last_message_preview || 'Untitled chat').toLowerCase()
+    const label = (conversation.title || conversation.last_message_preview || t('aiAssistant.untitledChat')).toLowerCase()
     return label.includes(historySearch.trim().toLowerCase())
   })
 
@@ -271,11 +269,11 @@ const AiAssistant = () => {
       if (!attachment.extractable) {
         setNotice({
           severity: 'warning',
-          message: `"${attachment.filename}" was attached, but no readable text could be found in it.`,
+          message: t('aiAssistant.attachmentUnreadableNotice', { filename: attachment.filename }),
         })
       }
     } catch (err) {
-      setNotice({ severity: 'error', message: err.message || 'Could not upload that file.' })
+      setNotice({ severity: 'error', message: err.message || t('aiAssistant.uploadFailedDefault') })
     } finally {
       setUploadingAttachment(false)
     }
@@ -293,7 +291,7 @@ const AiAssistant = () => {
     try {
       await downloadAssistantExport({ conversationId, format })
     } catch (err) {
-      setNotice({ severity: 'error', message: err.message || 'Export failed.' })
+      setNotice({ severity: 'error', message: err.message || t('aiAssistant.exportFailedDefault') })
     } finally {
       setExporting(false)
     }
@@ -301,6 +299,7 @@ const AiAssistant = () => {
 
   const sendMessage = async (rawText) => {
     const text = (rawText ?? input).trim()
+    console.log('sendMessage value:', text, 'type:', typeof text)
     if (!text || sending) return
 
     setInput('')
@@ -323,7 +322,7 @@ const AiAssistant = () => {
         attachmentIds: attachmentsForMessage.map((a) => a.id),
       })
       setConversationId(res.conversation_id)
-      setMessages((prev) => [...prev, res.reply])
+      setMessages((prev) => [...prev, { ...res.reply, _animate: true }])
       setPendingAttachments([])
       loadConversations()
     } catch (err) {
@@ -332,8 +331,9 @@ const AiAssistant = () => {
         {
           id: `error-${Date.now()}`,
           role: 'assistant',
-          content: `Sorry, I ran into a problem: ${err.message}`,
+          content: t('aiAssistant.assistantErrorMessage', { error: err.message }),
           created_at: new Date().toISOString(),
+          _animate: true,
         },
       ])
     } finally {
@@ -349,6 +349,7 @@ const AiAssistant = () => {
   }
 
   const hasMessages = messages.length > 0
+  const lastMessage = messages[messages.length - 1]
 
   const composer = (
     <Box
@@ -414,7 +415,7 @@ const AiAssistant = () => {
             fullWidth
             multiline
             maxRows={10}
-            placeholder="Ask anything..."
+            placeholder={t('aiAssistant.askAnythingPlaceholder')}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -431,8 +432,8 @@ const AiAssistant = () => {
                 size="small"
                 icon={<InsertDriveFileIcon sx={{ fontSize: 15 }} />}
                 label={`${attachment.filename}${
-                  attachment.size_bytes != null ? ` · ${formatFileSize(attachment.size_bytes)}` : ''
-                }${attachment.extractable === false ? ' · unreadable' : ''}`}
+                  attachment.size_bytes != null ? ` · ${formatFileSize(attachment.size_bytes, t)}` : ''
+                }${attachment.extractable === false ? ` · ${t('aiAssistant.attachmentChipUnreadable')}` : ''}`}
                 onDelete={() => removePendingAttachment(attachment.id)}
                 deleteIcon={<CloseIcon sx={{ fontSize: 14 }} />}
                 sx={{
@@ -462,7 +463,7 @@ const AiAssistant = () => {
           sx={{ mt: 1.5 }}
         >
           <Stack direction="row" alignItems="center" spacing={0.5}>
-            <Tooltip title="Attach a PDF, Word, Excel, or text file">
+            <Tooltip title={t('aiAssistant.attachTooltip')}>
               <span>
                 <IconButton
                   onClick={handleAttachClick}
@@ -482,7 +483,7 @@ const AiAssistant = () => {
               </span>
             </Tooltip>
 
-            <Tooltip title="Bring a task, report, or other item into this conversation">
+            <Tooltip title={t('aiAssistant.contextTooltip')}>
               <IconButton
                 onMouseEnter={openContextMenu}
                 onClick={openContextMenu}
@@ -547,7 +548,7 @@ const AiAssistant = () => {
                   <InputBase
                     fullWidth
                     autoFocus
-                    placeholder="Search tasks, reports, and more..."
+                    placeholder={t('aiAssistant.contextSearchPlaceholder')}
                     value={contextSearch}
                     onChange={(e) => {
                       setContextSearch(e.target.value)
@@ -568,7 +569,7 @@ const AiAssistant = () => {
                     <AutoAwesomeIcon sx={{ fontSize: 16, color: '#4f46e5' }} />
                   </ListItemIcon>
                   <ListItemText
-                    primary="General assistant"
+                    primary={t('aiAssistant.generalAssistant')}
                     primaryTypographyProps={{ fontSize: 13 }}
                   />
                   {!selectedTask && <CheckIcon sx={{ fontSize: 16, color: '#4f46e5' }} />}
@@ -580,11 +581,11 @@ const AiAssistant = () => {
                   <Typography
                     sx={{ fontSize: 12.5, color: 'text.disabled', textAlign: 'center', py: 3 }}
                   >
-                    {tasks.length === 0 ? 'Nothing to bring in yet' : 'No matches found'}
+                    {tasks.length === 0 ? t('aiAssistant.nothingToBringInYet') : t('aiAssistant.noMatchesFound')}
                   </Typography>
                 ) : (
                   contextItemsToShow.map((task) => {
-                    const meta = CONTEXT_CATEGORY_META[task.category] || { label: 'Other' }
+                    const meta = CONTEXT_CATEGORY_META[task.category] || { label: t('aiAssistant.contextCategoryOther') }
                     const isSelected = selectedTask?.id === task.id
                     return (
                       <MenuItem
@@ -619,7 +620,7 @@ const AiAssistant = () => {
                     sx={{ borderRadius: '10px', mx: 0.5, my: 0.25, justifyContent: 'center' }}
                   >
                     <Typography sx={{ fontSize: 12.5, fontWeight: 600, color: '#4f46e5' }}>
-                      See more
+                      {t('aiAssistant.seeMore')}
                     </Typography>
                     <ExpandMoreIcon sx={{ fontSize: 16, color: '#4f46e5', ml: 0.5 }} />
                   </MenuItem>
@@ -628,7 +629,7 @@ const AiAssistant = () => {
             </Popover>
           </Stack>
 
-          <Tooltip title="Send">
+          <Tooltip title={t('aiAssistant.sendTooltip')}>
             <span>
               <IconButton
                 onClick={() => sendMessage()}
@@ -668,7 +669,7 @@ const AiAssistant = () => {
         sx={{ px: 3, py: 2, flexShrink: 0 }}
       >
         <Stack direction="row" alignItems="center" spacing={1}>
-          <Tooltip title={hasMessages ? 'Export this conversation' : 'Start chatting to enable export'}>
+          <Tooltip title={hasMessages ? t('aiAssistant.exportTooltipEnabled') : t('aiAssistant.exportTooltipDisabled')}>
             <span>
               <IconButton
                 onClick={(e) => setExportAnchor(e.currentTarget)}
@@ -695,17 +696,17 @@ const AiAssistant = () => {
               <ListItemIcon>
                 <PictureAsPdfIcon sx={{ fontSize: 18 }} />
               </ListItemIcon>
-              Export as PDF
+              {t('aiAssistant.exportAsPdf')}
             </MenuItem>
             <MenuItem onClick={() => handleExport('docx')}>
               <ListItemIcon>
                 <DescriptionIcon sx={{ fontSize: 18 }} />
               </ListItemIcon>
-              Export as Word
+              {t('aiAssistant.exportAsWord')}
             </MenuItem>
           </Menu>
 
-          <Tooltip title="Chat history">
+          <Tooltip title={t('aiAssistant.chatHistory')}>
             <IconButton
               onClick={(e) => setHistoryAnchor(e.currentTarget)}
               sx={{
@@ -736,7 +737,7 @@ const AiAssistant = () => {
               '&:hover': { bgcolor: '#4338ca' },
             }}
           >
-            New Chat
+            {t('aiAssistant.newChat')}
           </Button>
         </Stack>
       </Stack>
@@ -766,12 +767,12 @@ const AiAssistant = () => {
       >
         <Box sx={{ px: 1.75, pt: 1.75, pb: 1 }}>
           <Typography sx={{ fontSize: 12.5, fontWeight: 700, mb: 1 }}>
-            Chat history
+            {t('aiAssistant.chatHistory')}
           </Typography>
           <InputBase
             fullWidth
             autoFocus
-            placeholder="Search..."
+            placeholder={t('aiAssistant.historySearchPlaceholder')}
             value={historySearch}
             onChange={(e) => setHistorySearch(e.target.value)}
             sx={{
@@ -791,7 +792,7 @@ const AiAssistant = () => {
             <Typography
               sx={{ fontSize: 12.5, color: 'text.disabled', textAlign: 'center', py: 3 }}
             >
-              {conversations.length === 0 ? 'No conversations yet' : 'No matches found'}
+              {conversations.length === 0 ? t('aiAssistant.noConversationsYet') : t('aiAssistant.noMatchesFound')}
             </Typography>
           ) : (
             <List dense disablePadding>
@@ -806,7 +807,7 @@ const AiAssistant = () => {
                     <ChatBubbleOutlineIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
                   </ListItemIcon>
                   <ListItemText
-                    primary={conversation.title || conversation.last_message_preview || 'Untitled chat'}
+                    primary={conversation.title || conversation.last_message_preview || t('aiAssistant.untitledChat')}
                     primaryTypographyProps={{ noWrap: true, fontSize: 13 }}
                   />
                 </ListItemButton>
@@ -833,7 +834,7 @@ const AiAssistant = () => {
           }}
         >
           <DeleteOutlineIcon sx={{ fontSize: 17 }} />
-          <Typography sx={{ fontSize: 12.5, fontWeight: 600 }}>Clear conversations</Typography>
+          <Typography sx={{ fontSize: 12.5, fontWeight: 600 }}>{t('aiAssistant.clearConversations')}</Typography>
         </Box>
       </Popover>
 
@@ -856,7 +857,7 @@ const AiAssistant = () => {
             align="center"
             sx={{ fontWeight: 700, fontSize: { xs: 22, md: 28 }, lineHeight: 1.3 }}
           >
-            {greetingFor(new Date().getHours())}, {firstName}
+            {t(greetingKeyFor(new Date().getHours()), { name: firstName })}
           </Typography>
 
           <Typography
@@ -868,9 +869,9 @@ const AiAssistant = () => {
               mb: 4,
             }}
           >
-            How Can I{' '}
+            {t('aiAssistant.howCanIHelpPrefix')}{' '}
             <Box component="span" sx={{ color: '#4f46e5' }}>
-              Assist You Today?
+              {t('aiAssistant.howCanIHelpHighlight')}
             </Box>
           </Typography>
 
@@ -879,7 +880,7 @@ const AiAssistant = () => {
           <Typography
             sx={{ mt: 3, mb: 1.25, fontSize: 12.5, color: 'text.secondary', fontWeight: 600 }}
           >
-            Not sure where to start? Try one of these:
+            {t('aiAssistant.tryOneOfThese')}
           </Typography>
 
           <Stack
@@ -920,7 +921,7 @@ const AiAssistant = () => {
             >
               <Stack direction="row" alignItems="center" spacing={0.5} sx={{ color: 'text.disabled' }}>
                 <HistoryIcon sx={{ fontSize: 16 }} />
-                <Typography sx={{ fontSize: 12, fontWeight: 600 }}>Recent</Typography>
+                <Typography sx={{ fontSize: 12, fontWeight: 600 }}>{t('aiAssistant.recent')}</Typography>
               </Stack>
 
               {conversations.slice(0, 6).map((conversation) => (
@@ -939,7 +940,7 @@ const AiAssistant = () => {
                     '&:hover': { color: '#4f46e5', bgcolor: 'rgba(79,70,229,0.06)' },
                   }}
                 >
-                  {conversation.title || conversation.last_message_preview || 'Untitled chat'}
+                  {conversation.title || conversation.last_message_preview || t('aiAssistant.untitledChat')}
                 </Typography>
               ))}
             </Stack>
@@ -963,7 +964,7 @@ const AiAssistant = () => {
             {messages.map((message, index) => {
               const previous = messages[index - 1]
               const showDaySeparator =
-                !previous || dayLabelFor(message.created_at) !== dayLabelFor(previous.created_at)
+                !previous || dayLabelFor(message.created_at, t) !== dayLabelFor(previous.created_at, t)
 
               return (
                 <Box key={message.id}>
@@ -971,7 +972,7 @@ const AiAssistant = () => {
                     <Stack direction="row" alignItems="center" spacing={1.5} sx={{ my: 1.5 }}>
                       <Divider sx={{ flex: 1 }} />
                       <Typography sx={{ fontSize: 11.5, fontWeight: 700, color: 'text.disabled' }}>
-                        {dayLabelFor(message.created_at)}
+                        {dayLabelFor(message.created_at, t)}
                       </Typography>
                       <Divider sx={{ flex: 1 }} />
                     </Stack>
@@ -982,11 +983,45 @@ const AiAssistant = () => {
                     timestamp={message.created_at}
                     user={user}
                     attachments={message.attachments || []}
+                    animate={Boolean(message._animate)}
                   />
                 </Box>
               )
             })}
             {sending && <TypingIndicator />}
+
+            {!sending && lastMessage?.role === 'assistant' && lastMessage.suggestions?.length > 0 && (
+              <Stack spacing={0.75} sx={{ pl: { xs: 0, sm: 5 } }}>
+                <Typography sx={{ fontSize: 11.5, fontWeight: 600, color: 'text.disabled' }}>
+                  {t('aiAssistant.followUpSuggestions')}
+                </Typography>
+                <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
+                {lastMessage.suggestions.map((suggestion) => (
+                  <Chip
+                    key={suggestion}
+                    label={suggestion}
+                    variant="outlined"
+                    onClick={() => sendMessage(suggestion)}
+                    sx={{
+                      borderRadius: '999px',
+                      fontSize: 12.5,
+                      bgcolor: panel,
+                      cursor: 'pointer',
+                      borderColor: (theme) =>
+                        theme.palette.mode === 'dark'
+                          ? 'rgba(255,255,255,0.12)'
+                          : 'rgba(0,0,0,0.10)',
+                      '&:hover': {
+                        borderColor: 'rgba(79,70,229,0.45)',
+                        bgcolor: 'rgba(79,70,229,0.05)',
+                      },
+                    }}
+                  />
+                ))}
+                </Stack>
+              </Stack>
+            )}
+
             <div ref={scrollAnchorRef} />
           </Box>
 

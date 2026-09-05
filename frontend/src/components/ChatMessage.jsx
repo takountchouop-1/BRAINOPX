@@ -1,15 +1,51 @@
-import React from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import Avatar from '@mui/material/Avatar'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import CheckCircleIconImport from '@mui/icons-material/CheckCircle'
 import SmartToyIconImport from '@mui/icons-material/SmartToy'
 import InsertDriveFileIconImport from '@mui/icons-material/InsertDriveFileOutlined'
+import SearchIconImport from '@mui/icons-material/SearchOutlined'
+import SettingsIconImport from '@mui/icons-material/SettingsOutlined'
+import TrendingUpIconImport from '@mui/icons-material/TrendingUpOutlined'
+import RocketLaunchIconImport from '@mui/icons-material/RocketLaunchOutlined'
+import TrackChangesIconImport from '@mui/icons-material/TrackChangesOutlined'
+import { useTranslation } from 'react-i18next'
 import assistantAvatar from '../assets/agent.jpg'
 
 const CheckCircleIcon = CheckCircleIconImport?.default || CheckCircleIconImport
 const SmartToyIcon = SmartToyIconImport?.default || SmartToyIconImport
 const InsertDriveFileIcon = InsertDriveFileIconImport?.default || InsertDriveFileIconImport
+const SearchIcon = SearchIconImport?.default || SearchIconImport
+const SettingsIcon = SettingsIconImport?.default || SettingsIconImport
+const TrendingUpIcon = TrendingUpIconImport?.default || TrendingUpIconImport
+const RocketLaunchIcon = RocketLaunchIconImport?.default || RocketLaunchIconImport
+const TrackChangesIcon = TrackChangesIconImport?.default || TrackChangesIconImport
+
+// Cycled by step index so a long guide still reads with some visual
+// variety instead of the same glyph repeated down the list.
+const STEP_ICONS = [SearchIcon, SettingsIcon, TrendingUpIcon, RocketLaunchIcon, TrackChangesIcon]
+
+// A single continuous hue sweep (cyan → indigo → magenta) sampled per
+// step, so each card's gradient flows smoothly into the next one's
+// down the whole list rather than repeating a fixed pair of tones.
+const STEP_HUE_START = 190
+const STEP_HUE_SPAN = 150
+
+const stepHue = (position) => STEP_HUE_START + STEP_HUE_SPAN * position
+
+const stepHsl = (hue) => `hsl(${hue}, 82%, 56%)`
+
+const stepGradient = (index, total) => {
+  const t0 = total <= 1 ? 0 : index / total
+  const t1 = total <= 1 ? 1 : (index + 1) / total
+  return `linear-gradient(135deg, ${stepHsl(stepHue(t0))}, ${stepHsl(stepHue(t1))})`
+}
+
+const stepAccent = (index, total) => {
+  const mid = total <= 1 ? 0.5 : (index + 0.5) / total
+  return stepHsl(stepHue(mid))
+}
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -183,18 +219,20 @@ const clockOf = (timestamp) => {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-const formatFileSize = (bytes) => {
+const formatFileSize = (bytes, t) => {
   if (!bytes && bytes !== 0) return ''
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  if (bytes < 1024) return t('chatMessage.fileSizeBytes', { size: bytes })
+  if (bytes < 1024 * 1024) return t('chatMessage.fileSizeKB', { size: (bytes / 1024).toFixed(1) })
+  return t('chatMessage.fileSizeMB', { size: (bytes / (1024 * 1024)).toFixed(1) })
 }
 
 /**
  * Small file chips shown inside a message bubble for any documents
  * (PDF/Word/etc.) attached to that turn.
  */
-const AttachmentChips = ({ attachments, isUser }) => (
+const AttachmentChips = ({ attachments, isUser }) => {
+  const { t } = useTranslation('components')
+  return (
   <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mt: 1 }}>
     {attachments.map((attachment) => (
       <Box
@@ -227,13 +265,118 @@ const AttachmentChips = ({ attachments, isUser }) => (
         </Box>
         {attachment.size_bytes != null && (
           <Box component="span" sx={{ opacity: 0.75, flexShrink: 0 }}>
-            {formatFileSize(attachment.size_bytes)}
+            {formatFileSize(attachment.size_bytes, t)}
           </Box>
         )}
       </Box>
     ))}
   </Box>
-)
+  )
+}
+
+// ─── TYPEWRITER REVEAL ───────────────────────────────────────────────────────
+// Assistant replies arrive whole from the API, but a message the caller
+// flags as freshly-arrived (`animate`) is revealed a few characters at a
+// time so it reads like a live response instead of popping in all at
+// once — history loaded from the server is never flagged, so it renders
+// instantly as before.
+
+const plainLengthOf = (content, isHtml) => {
+  const str = String(content || '')
+  return isHtml ? str.replace(/<[^>]*>/g, '').length : str.length
+}
+
+const VOID_TAGS = new Set([
+  'br', 'hr', 'img', 'input', 'col', 'area', 'base', 'embed', 'link', 'meta', 'source', 'track', 'wbr',
+])
+
+// Walks an HTML string, copying tags through untouched and only counting
+// text-node characters against `charBudget`, closing any tag still open
+// at the cutoff so the truncated markup stays valid mid-reveal.
+const revealHtml = (html, charBudget) => {
+  const str = String(html || '')
+  let out = ''
+  let budget = charBudget
+  let i = 0
+  const stack = []
+
+  while (i < str.length) {
+    if (budget <= 0) break
+
+    if (str[i] === '<') {
+      const end = str.indexOf('>', i)
+      if (end === -1) break
+      const tag = str.slice(i, end + 1)
+      out += tag
+
+      const closeMatch = tag.match(/^<\/([a-zA-Z0-9]+)/)
+      const openMatch = tag.match(/^<([a-zA-Z0-9]+)/)
+      if (closeMatch) {
+        const name = closeMatch[1].toLowerCase()
+        const idx = stack.lastIndexOf(name)
+        if (idx !== -1) stack.splice(idx, 1)
+      } else if (openMatch && !tag.endsWith('/>') && !VOID_TAGS.has(openMatch[1].toLowerCase())) {
+        stack.push(openMatch[1].toLowerCase())
+      }
+
+      i = end + 1
+      continue
+    }
+
+    out += str[i]
+    budget -= 1
+    i += 1
+  }
+
+  for (let k = stack.length - 1; k >= 0; k -= 1) {
+    out += `</${stack[k]}>`
+  }
+
+  return out
+}
+
+const useTypewriterReveal = (content, enabled, isHtml) => {
+  const totalLength = useMemo(() => plainLengthOf(content, isHtml), [content, isHtml])
+  const [revealedLength, setRevealedLength] = useState(enabled ? 0 : totalLength)
+  const timerRef = useRef(null)
+
+  useEffect(() => {
+    clearTimeout(timerRef.current)
+
+    if (!enabled || totalLength === 0) {
+      setRevealedLength(totalLength)
+      return undefined
+    }
+
+    const reducedMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    if (reducedMotion) {
+      setRevealedLength(totalLength)
+      return undefined
+    }
+
+    let count = 0
+    setRevealedLength(0)
+    // A handful of characters per tick, scaled to length, so a short
+    // reply still feels instant and a long one doesn't take forever.
+    const charsPerTick = Math.max(2, Math.round(totalLength / 150))
+    const TICK_MS = 22
+
+    const tick = () => {
+      count = Math.min(totalLength, count + charsPerTick)
+      setRevealedLength(count)
+      if (count < totalLength) {
+        timerRef.current = setTimeout(tick, TICK_MS)
+      }
+    }
+    timerRef.current = setTimeout(tick, TICK_MS)
+
+    return () => clearTimeout(timerRef.current)
+  }, [content, enabled, totalLength])
+
+  return { revealedLength, totalLength }
+}
 
 // ─── LIGHTWEIGHT MARKDOWN ────────────────────────────────────────────────────
 // The assistant's replies come back as plain text with **bold**, numbered
@@ -256,8 +399,36 @@ const renderInline = (line, keyPrefix) => {
   })
 }
 
+// A markdown pipe-table row: "| a | b |" (leading/trailing pipe required).
+const isTableRow = (line) => /^\|(.+)\|$/.test(line)
+
+// The header/body divider row, e.g. "| --- | :---: |".
+const isTableSeparatorRow = (line) => {
+  if (!isTableRow(line)) return false
+  const cells = line.slice(1, -1).split('|').map((c) => c.trim())
+  return cells.length > 0 && cells.every((c) => /^:?-{1,}:?$/.test(c))
+}
+
+const splitTableRow = (line) => line.slice(1, -1).split('|').map((c) => c.trim())
+
+// A guide-step line: "**Short Title** — one-sentence description."
+// (also accepts an en/em dash, hyphen, or colon as the separator, since
+// the model doesn't always reach for an em dash). Matched against the
+// system prompt's requested "**Title** — sentence" step format.
+const STEP_LINE_RE = /^\*\*([^*]+)\*\*\s*(?:—|–|-|:)\s*(.+)$/
+
+// An ordered list only renders as illustrated step cards when every
+// item follows that shape — a single non-matching item (a plain
+// numbered instruction, no bold lead) falls the whole list back to a
+// normal <ol> rather than rendering a mismatched mix of the two.
+const asStepItems = (items) => {
+  const parsed = items.map((item) => item.match(STEP_LINE_RE))
+  if (!parsed.every(Boolean)) return null
+  return parsed.map((match) => ({ title: match[1].trim(), description: match[2].trim() }))
+}
+
 const parseAssistantBlocks = (text) => {
-  const lines = String(text || '').split('\n')
+  const lines = String(text || '').split('\n').map((l) => l.trim())
   const blocks = []
   let currentList = null
 
@@ -268,19 +439,36 @@ const parseAssistantBlocks = (text) => {
     }
   }
 
-  lines.forEach((rawLine) => {
-    const line = rawLine.trim()
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i]
 
     if (!line) {
       flushList()
-      return
+      i += 1
+      continue
+    }
+
+    // A table: a row, then a "---" separator row, then zero or more rows.
+    if (isTableRow(line) && isTableSeparatorRow(lines[i + 1] || '')) {
+      flushList()
+      const headers = splitTableRow(line)
+      const rows = []
+      i += 2
+      while (i < lines.length && isTableRow(lines[i])) {
+        rows.push(splitTableRow(lines[i]))
+        i += 1
+      }
+      blocks.push({ type: 'table', headers, rows })
+      continue
     }
 
     const heading = line.match(/^(#{1,3})\s+(.*)$/)
     if (heading) {
       flushList()
       blocks.push({ type: `h${heading[1].length}`, text: heading[2].trim() })
-      return
+      i += 1
+      continue
     }
 
     const numbered = line.match(/^\d+[.)]\s+(.*)$/)
@@ -292,7 +480,8 @@ const parseAssistantBlocks = (text) => {
         currentList = { type: 'ol', items: [] }
       }
       currentList.items.push(numbered[1])
-      return
+      i += 1
+      continue
     }
 
     if (bulleted) {
@@ -301,16 +490,215 @@ const parseAssistantBlocks = (text) => {
         currentList = { type: 'ul', items: [] }
       }
       currentList.items.push(bulleted[1])
-      return
+      i += 1
+      continue
     }
 
     flushList()
     blocks.push({ type: 'p', text: line })
-  })
+    i += 1
+  }
 
   flushList()
   return blocks
 }
+
+/**
+ * A markdown table parsed out of the assistant's plain text, rendered as
+ * a real <table> — scrolling inside itself so a wide table never
+ * stretches the chat bubble.
+ */
+const AssistantTable = ({ headers, rows }) => (
+  <Box sx={{ overflowX: 'auto', mb: 1, '&:last-child': { mb: 0 } }}>
+    <Box
+      component="table"
+      sx={{
+        borderCollapse: 'collapse',
+        width: 'max-content',
+        minWidth: '100%',
+        fontSize: 13.5,
+        '& th, & td': {
+          border: (theme) =>
+            theme.palette.mode === 'dark'
+              ? '1px solid rgba(255,255,255,0.14)'
+              : '1px solid rgba(0,0,0,0.12)',
+          padding: '5px 10px',
+          textAlign: 'left',
+          whiteSpace: 'nowrap',
+        },
+        '& th': {
+          background: (theme) =>
+            theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.08)' : '#eef2ff',
+          fontWeight: 700,
+        },
+      }}
+    >
+      <Box component="thead">
+        <Box component="tr">
+          {headers.map((cell, i) => (
+            <Box component="th" key={i}>
+              {renderInline(cell, `th-${i}`)}
+            </Box>
+          ))}
+        </Box>
+      </Box>
+      <Box component="tbody">
+        {rows.map((row, r) => (
+          <Box component="tr" key={r}>
+            {row.map((cell, c) => (
+              <Box component="td" key={c}>
+                {renderInline(cell, `td-${r}-${c}`)}
+              </Box>
+            ))}
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  </Box>
+)
+
+/**
+ * One step of an illustrated guide, styled after a fused "pill + tab"
+ * infographic: a rounded number tab on one side, a rounded card with an
+ * icon badge and title/description on the other — the two pieces share
+ * a straight seam so they read as a single connected shape. The number
+ * tab alternates sides down the list (a light zigzag), and the icon
+ * always sits at the card's outer edge, text always sits against the
+ * seam next to the number.
+ */
+const StepGuideCard = ({ number, title, description, Icon, gradient, accent, numberOnRight }) => {
+  const RADIUS = 22
+
+  const tab = (
+    <Box
+      sx={{
+        width: 52,
+        flexShrink: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: gradient,
+        color: '#fff',
+        fontSize: 19,
+        fontWeight: 800,
+        borderRadius: numberOnRight ? `0 ${RADIUS}px ${RADIUS}px 0` : `${RADIUS}px 0 0 ${RADIUS}px`,
+      }}
+    >
+      {String(number).padStart(2, '0')}
+    </Box>
+  )
+
+  const iconBadge = (
+    <Box
+      sx={{
+        width: 34,
+        height: 34,
+        borderRadius: '50%',
+        flexShrink: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        border: `1.5px solid ${accent}55`,
+        color: accent,
+      }}
+    >
+      <Icon sx={{ fontSize: 17 }} />
+    </Box>
+  )
+
+  const textBlock = (
+    <Box sx={{ minWidth: 0 }}>
+      <Box sx={{ width: 22, height: 2.5, borderRadius: 2, background: gradient, mb: 0.6 }} />
+      <Typography
+        sx={{
+          fontSize: 11.5,
+          fontWeight: 800,
+          letterSpacing: '0.05em',
+          textTransform: 'uppercase',
+          color: accent,
+          mb: 0.35,
+        }}
+      >
+        {title}
+      </Typography>
+      <Typography sx={{ fontSize: 13, lineHeight: 1.45, opacity: 0.78 }}>{description}</Typography>
+    </Box>
+  )
+
+  const card = (
+    <Box
+      sx={{
+        flex: 1,
+        minWidth: 0,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1.25,
+        px: 2,
+        py: 1.5,
+        bgcolor: (theme) => (theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.06)' : '#ffffff'),
+        boxShadow: (theme) =>
+          theme.palette.mode === 'dark'
+            ? '0 4px 14px rgba(0,0,0,0.3)'
+            : '0 4px 14px rgba(16,24,40,0.10)',
+        borderRadius: numberOnRight ? `${RADIUS}px 0 0 ${RADIUS}px` : `0 ${RADIUS}px ${RADIUS}px 0`,
+      }}
+    >
+      {numberOnRight ? (
+        <>
+          {iconBadge}
+          {textBlock}
+        </>
+      ) : (
+        <>
+          {textBlock}
+          {iconBadge}
+        </>
+      )}
+    </Box>
+  )
+
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        alignItems: 'stretch',
+        ml: numberOnRight ? 0 : { xs: 1, sm: 2 },
+        mr: numberOnRight ? { xs: 1, sm: 2 } : 0,
+        mb: 1.5,
+        '&:last-child': { mb: 0 },
+      }}
+    >
+      {numberOnRight ? (
+        <>
+          {card}
+          {tab}
+        </>
+      ) : (
+        <>
+          {tab}
+          {card}
+        </>
+      )}
+    </Box>
+  )
+}
+
+const StepGuideList = ({ steps }) => (
+  <Box sx={{ mb: 1, '&:last-child': { mb: 0 } }}>
+    {steps.map((step, i) => (
+      <StepGuideCard
+        key={i}
+        number={i + 1}
+        title={step.title}
+        description={step.description}
+        Icon={STEP_ICONS[i % STEP_ICONS.length]}
+        gradient={stepGradient(i, steps.length)}
+        accent={stepAccent(i, steps.length)}
+        numberOnRight={i % 2 === 0}
+      />
+    ))}
+  </Box>
+)
 
 // Structured reports the assistant produces use '#'/'##'/'###' headings —
 // rendered with real heading typography instead of literal '#' characters.
@@ -342,6 +730,10 @@ const AssistantRichText = ({ text }) => {
           )
         }
 
+        if (block.type === 'table') {
+          return <AssistantTable key={i} headers={block.headers} rows={block.rows} />
+        }
+
         if (block.type === 'p') {
           return (
             <Typography
@@ -352,6 +744,11 @@ const AssistantRichText = ({ text }) => {
               {renderInline(block.text, `p-${i}`)}
             </Typography>
           )
+        }
+
+        if (block.type === 'ol') {
+          const steps = asStepItems(block.items)
+          if (steps) return <StepGuideList key={i} steps={steps} />
         }
 
         const ListTag = block.type === 'ol' ? 'ol' : 'ul'
@@ -393,9 +790,21 @@ const ChatMessage = ({
   html = false,
   user = null,
   attachments = [],
+  animate = false,
 }) => {
+  const { t } = useTranslation('components')
   const isUser = sender === 'user'
   const clock = clockOf(timestamp)
+
+  // Only ever animates a message the caller has flagged as freshly
+  // arrived; the person's own bubble is never typed out.
+  const canAnimate = animate && !isUser
+  const { revealedLength } = useTypewriterReveal(text, canAnimate, html)
+  const displayedText = !canAnimate
+    ? text
+    : html
+      ? revealHtml(text, revealedLength)
+      : String(text || '').slice(0, revealedLength)
 
   const bubbleBase = {
     position: 'relative',
@@ -467,7 +876,7 @@ const ChatMessage = ({
       {isUser ? (
         <Avatar
           src={profileUrlOf(user) || undefined}
-          alt={user?.full_name || 'You'}
+          alt={user?.full_name || t('chatMessage.you')}
           sx={{
             width: 30,
             height: 30,
@@ -483,7 +892,7 @@ const ChatMessage = ({
       ) : (
         <Avatar
           src={assistantAvatar}
-          alt="Assistant"
+          alt={t('chatMessage.assistant')}
           sx={{
             width: 36,
             height: 36,
@@ -527,7 +936,7 @@ const ChatMessage = ({
               ml: 0.5,
             }}
           >
-            Assistant
+            {t('chatMessage.assistant')}
           </Typography>
         )}
 
@@ -537,7 +946,7 @@ const ChatMessage = ({
               component="div"
               variant="body2"
               sx={assistantContentStyles}
-              dangerouslySetInnerHTML={{ __html: text }}
+              dangerouslySetInnerHTML={{ __html: displayedText }}
             />
           ) : isUser ? (
             <Typography
@@ -547,7 +956,7 @@ const ChatMessage = ({
               {text}
             </Typography>
           ) : (
-            <AssistantRichText text={text} />
+            <AssistantRichText text={displayedText} />
           )}
 
           {attachments.length > 0 && (
@@ -573,7 +982,7 @@ const ChatMessage = ({
                 variant="caption"
                 sx={{ fontSize: 11, fontWeight: 700, color: VALIDATED_COLOR }}
               >
-                Validated
+                {t('chatMessage.validated')}
               </Typography>
             </>
           )}
@@ -624,7 +1033,10 @@ export const TypingDots = ({ size = 6, color, dark }) => (
  * ChatMessage bubble so it reads as part of the same conversation
  * instead of a generic spinner floating outside the message list.
  */
-export const TypingIndicator = ({ label = 'Assistant is thinking' }) => (
+export const TypingIndicator = ({ label }) => {
+  const { t } = useTranslation('components')
+  const resolvedLabel = label || t('chatMessage.assistantThinking')
+  return (
   <Box
     sx={{
       display: 'flex',
@@ -636,7 +1048,7 @@ export const TypingIndicator = ({ label = 'Assistant is thinking' }) => (
   >
     <Avatar
       src={assistantAvatar}
-      alt="Assistant"
+      alt={t('chatMessage.assistant')}
       sx={{
         width: 36,
         height: 36,
@@ -674,7 +1086,7 @@ export const TypingIndicator = ({ label = 'Assistant is thinking' }) => (
     >
       <Box
         role="status"
-        aria-label={label}
+        aria-label={resolvedLabel}
         sx={{
           px: 2.2,
           py: 1.6,
@@ -705,6 +1117,7 @@ export const TypingIndicator = ({ label = 'Assistant is thinking' }) => (
       </Box>
     </Box>
   </Box>
-)
+  )
+}
 
 export default ChatMessage

@@ -47,6 +47,10 @@ _PUBLIC_STEP_FIELDS = (
     # "ai" (Groq), "builder" (deterministic generator), or "none". Lets
     # a caller tell a real AI-generated example from an offline one.
     "example_source",
+    # Plain-language description of the general format the example
+    # follows (Groq-generated only). Lets the user construct their own
+    # valid values instead of only copying the one example shown.
+    "example_explanation",
 )
 
 # Verdict fields safe to send to the client. Notably absent:
@@ -190,6 +194,18 @@ def example_for(step: dict, fallback: str = "") -> str:
         step.get("suggested_example"),
         _clean(fallback),
     )
+
+
+def explanation_for(step: dict) -> str:
+    """
+    Plain-language description of the general format the current
+    example follows, so the user can build their own valid values
+    rather than only copying the one example shown. Empty unless the
+    example came from the AI, which is the only source that produces
+    this.
+    """
+
+    return _clean(step.get("example_explanation"))
 
 
 def problems_from(verdict: dict, limit: Optional[int] = None) -> list[str]:
@@ -552,11 +568,16 @@ def build_edit_success_message(
     workflow.
     """
 
-    blocks = [block(ROLE_CONFIRMATION, f"{step_label(step)} updated.")]
-
     from app.services import composite_rules
 
     shape = composite_rules.input_shape(step)
+
+    label_line = f"{step_label(step)} updated."
+
+    if shape not in composite_rules.COMPOSITE_SHAPES and _clean(submitted_value):
+        label_line = f'{step_label(step)} updated: "{_clean(submitted_value)}"'
+
+    blocks = [block(ROLE_CONFIRMATION, label_line)]
 
     if shape == composite_rules.SHAPE_TABLE:
         rendered = composite_rules.render_submitted_table(step, submitted_value, {})
@@ -616,6 +637,12 @@ def build_step_prompt(
 
     if value:
         blocks.append(block(ROLE_EXAMPLE, f"Example input: {value}"))
+
+        explanation = explanation_for(step)
+
+        if explanation:
+            blocks.append(block(ROLE_TEXT, f"Format: {explanation}"))
+
     elif step.get("example_source") == "ai_unavailable":
         blocks.append(
             block(
@@ -672,6 +699,13 @@ def build_failure_message(
         if submitted:
             blocks.append(block(ROLE_TABLE, submitted))
 
+    elif _clean(submitted_value):
+        # Quotes the value back so the problem below reads against
+        # what was actually typed, not just against the rule.
+        blocks.append(
+            block(ROLE_TEXT, f'You entered: "{_clean(submitted_value)}"')
+        )
+
     problems = problems_from(verdict)
 
     if len(problems) == 1:
@@ -725,6 +759,127 @@ def build_failure_message(
     return blocks
 
 
+def build_warning_message(
+    step: dict,
+    step_index: int,
+    total: int,
+    warning_reason: str,
+    example: str = "",
+) -> list[dict]:
+    """
+    Blocks for a value that is hard-valid but risky.
+
+    Explains the risk, then asks the user to explicitly accept or
+    decline — the step does not advance until they answer either way.
+    """
+
+    label = step_label(step)
+
+    blocks = [
+        block(
+            ROLE_HEADING,
+            f"{step_heading(step, step_index, total)} — accepted with a warning",
+        ),
+    ]
+
+    if _clean(example):
+        blocks.append(block(ROLE_TEXT, f'You entered: "{_clean(example)}"'))
+
+    reason = _clean(warning_reason) or (
+        "This value is unusual — please confirm before continuing."
+    )
+    blocks.append(block(ROLE_PROBLEM, reason))
+
+    blocks.append(
+        block(
+            ROLE_INSTRUCTION,
+            f"Type 'yes' to continue with this {label} anyway, "
+            "or 'no' to enter a different value.",
+        )
+    )
+
+    return blocks
+
+
+def build_warning_declined_message(
+    step: dict,
+    step_index: int,
+    total: int,
+    example: str = "",
+) -> list[dict]:
+    """
+    Blocks after the user declines a WARNING.
+
+    The declined value was not wrong — build_failure_message's "what
+    is missing" framing does not apply — so this simply confirms it
+    was set aside and re-prompts for a different one.
+    """
+
+    blocks = [
+        block(
+            ROLE_CONFIRMATION,
+            "That value was not used. Let's try a different one.",
+        ),
+    ]
+
+    blocks.extend(build_step_prompt(step, step_index, total, example))
+
+    return blocks
+
+
+def build_need_more_info_message(
+    step: dict,
+    step_index: int,
+    total: int,
+    missing_topics: list,
+) -> list[dict]:
+    """
+    Blocks asking for exactly what a hard-valid answer still needs to
+    cover. The step stays at the SAME position — this is not a
+    rejection, so what the user already wrote is not discarded.
+    """
+
+    blocks = [
+        block(ROLE_HEADING, step_heading(step, step_index, total)),
+    ]
+
+    topics = [
+        str(topic).strip()
+        for topic in (missing_topics or [])
+        if str(topic).strip()
+    ]
+
+    if len(topics) == 1:
+        blocks.append(
+            block(
+                ROLE_PROBLEM,
+                f"Almost there — please also address: {topics[0]}",
+            )
+        )
+    elif topics:
+        blocks.append(block(ROLE_PROBLEM, "Almost there — please also address:"))
+        blocks.extend(
+            block(ROLE_PROBLEM, f"- {topic}")
+            for topic in topics
+        )
+    else:
+        blocks.append(
+            block(
+                ROLE_PROBLEM,
+                "A little more detail is needed before this can be accepted.",
+            )
+        )
+
+    blocks.append(
+        block(
+            ROLE_INSTRUCTION,
+            "You can add to what you already wrote — no need to start over.",
+        )
+    )
+
+    return blocks
+
+
 def build_success_message(
     step: dict,
     step_index: int,
@@ -741,13 +896,19 @@ def build_success_message(
     the step was filled in rather than as a raw separated blob.
     """
 
-    blocks = [
-        block(ROLE_CONFIRMATION, f"{step_label(step)} accepted."),
-    ]
-
     from app.services import composite_rules
 
     shape = composite_rules.input_shape(step)
+
+    # A plain single-value step quotes back exactly what was accepted,
+    # rather than just confirming the step name — the user can see the
+    # response is about the value they typed, not a generic pass.
+    label_line = f"{step_label(step)} accepted."
+
+    if shape not in composite_rules.COMPOSITE_SHAPES and _clean(submitted_value):
+        label_line = f'{step_label(step)} accepted: "{_clean(submitted_value)}"'
+
+    blocks = [block(ROLE_CONFIRMATION, label_line)]
 
     if shape == composite_rules.SHAPE_TABLE:
         rendered = composite_rules.render_submitted_table(step, submitted_value, {})
@@ -803,6 +964,11 @@ def _step_reminder(
     if value:
         blocks.append(block(ROLE_EXAMPLE, f"Example input: {value}"))
 
+        explanation = explanation_for(step)
+
+        if explanation:
+            blocks.append(block(ROLE_TEXT, f"Format: {explanation}"))
+
     return blocks
 
 
@@ -812,6 +978,7 @@ def build_off_track_message(
     total: int,
     intent: str,
     example: str = "",
+    ai_explanation: str = "",
 ) -> list[dict]:
     """
     Reply to input that was not an attempt at this step's value.
@@ -819,6 +986,11 @@ def build_off_track_message(
     Says plainly what happened — the message was not understood, or
     it asked about something out of scope — then repeats what the
     step needs. The rule behind the step is not revealed here either.
+
+    ai_explanation, when given, is a fresh model-generated answer to a
+    QUESTION_STEP — the caller (guided_engine) already scoped that call
+    to this one rule, so it is shown as-is rather than replaced by the
+    generic "Here is what this step needs." line.
     """
 
     from app.services import input_intent
@@ -836,7 +1008,7 @@ def build_off_track_message(
             block(ROLE_HEADING, heading),
             block(
                 ROLE_TEXT,
-                "Here is what this step needs.",
+                ai_explanation.strip() if ai_explanation.strip() else "Here is what this step needs.",
             ),
         ]
 
@@ -871,6 +1043,77 @@ def build_off_track_message(
     return opening + _step_reminder(step, step_index, total, example)
 
 
+# ============================================================
+# THE AI ASKS FOR A FILE OR SCREENSHOT
+#
+# Reached only after several consecutive off-track turns on the same
+# step (see guided_engine's confusion tracking) — a plain-language
+# explanation alone has not been enough, so the user is invited to
+# show, rather than describe, what they are working with.
+# ============================================================
+
+def build_request_attachment_message(
+    step: dict,
+    step_index: int,
+    total: int,
+) -> list[dict]:
+    """Blocks asking the user to attach a file or screenshot."""
+
+    return [
+        block(ROLE_HEADING, step_heading(step, step_index, total)),
+        block(
+            ROLE_TEXT,
+            "I'm having trouble making this clear from words alone. "
+            "Could you attach a file or a screenshot showing what "
+            "you're working with? Use the paperclip button below.",
+        ),
+        block(
+            ROLE_INSTRUCTION,
+            "Type 'skip' instead if you'd rather keep going without one.",
+        ),
+    ]
+
+
+def build_awaiting_attachment_reminder_message(
+    step: dict,
+    step_index: int,
+    total: int,
+) -> list[dict]:
+    """Repeated while a step is parked waiting for the requested attachment."""
+
+    return [
+        block(ROLE_HEADING, step_heading(step, step_index, total)),
+        block(
+            ROLE_TEXT,
+            "Still waiting on that file or screenshot — attach it with "
+            "the paperclip button, or type 'skip' to continue without one.",
+        ),
+    ]
+
+
+def build_attachment_processed_message(
+    step: dict,
+    step_index: int,
+    total: int,
+    ai_explanation: str,
+    example: str = "",
+) -> list[dict]:
+    """Blocks shown once the requested attachment has been read."""
+
+    heading = step_heading(step, step_index, total)
+
+    opening = [
+        block(ROLE_HEADING, heading),
+        block(
+            ROLE_TEXT,
+            ai_explanation.strip() if ai_explanation.strip()
+            else "Thanks — I've noted that. Here is what this step needs.",
+        ),
+    ]
+
+    return opening + _step_reminder(step, step_index, total, example)
+
+
 def build_error_message(
     step: dict,
     step_index: int,
@@ -892,4 +1135,26 @@ def build_error_message(
             "complete the check. Nothing was recorded.",
         ),
         block(ROLE_INSTRUCTION, "Please send the value again."),
+    ] + _step_reminder(step, step_index, total, example)
+
+
+def build_network_error_message(
+    step: dict,
+    step_index: int,
+    total: int,
+    example: str = "",
+) -> list[dict]:
+    """
+    Reply when Groq could not be reached at all (no internet, a DNS
+    failure, a dropped connection) — distinguished from
+    build_error_message so the user is told to check their
+    connection rather than just "send it again".
+    """
+
+    return [
+        block(ROLE_HEADING, step_heading(step, step_index, total)),
+        block(
+            ROLE_PROBLEM,
+            "Please check your network and retry.",
+        ),
     ] + _step_reminder(step, step_index, total, example)

@@ -1,10 +1,12 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
 import { login as loginRequest } from '../services/Authenticationservice.js'
+import i18n, { LANGUAGE_STORAGE_KEY, SUPPORTED_LANGUAGES } from '../i18n/index.js'
 
 const AuthContext = createContext(null)
 
 const TOKEN_STORAGE_KEY = 'brainopx_token'
 const USER_STORAGE_KEY = 'brainopx_user'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 export const AuthProvider = ({ children }) => {
   const [token, setToken] = useState(null)
@@ -28,6 +30,18 @@ export const AuthProvider = ({ children }) => {
     setIsInitializing(false)
   }, [])
 
+  // The signed-in user's saved `language` is the source of truth once
+  // there is a session — keep the UI (and localStorage, so a guest
+  // screen briefly shown after logout stays consistent) following it
+  // whenever it changes, rather than syncing it separately at every
+  // call site that can set `user`.
+  useEffect(() => {
+    if (user?.language && SUPPORTED_LANGUAGES.includes(user.language)) {
+      i18n.changeLanguage(user.language)
+      localStorage.setItem(LANGUAGE_STORAGE_KEY, user.language)
+    }
+  }, [user?.language])
+
   const login = async ({ email, password }) => {
     const result = await loginRequest({ email, password })
     
@@ -46,6 +60,26 @@ export const AuthProvider = ({ children }) => {
   localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(userData))
   return result
 }
+
+  // Used after the Google OAuth redirect: the backend already issued a
+  // normal BRAINOPX access token, we just need to fetch who it belongs
+  // to and persist the session the same way the password flow does.
+  const loginWithToken = async (accessToken) => {
+    const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    })
+
+    if (!response.ok) {
+      throw new Error('Unable to complete Google sign-in.')
+    }
+
+    const userData = await response.json()
+    setToken(accessToken)
+    setUser(userData)
+    localStorage.setItem(TOKEN_STORAGE_KEY, accessToken)
+    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(userData))
+    return userData
+  }
 
   const updateUser = (updatedData) => {
     setUser((prevUser) => {
@@ -68,6 +102,7 @@ export const AuthProvider = ({ children }) => {
     isAuthenticated: !!token,
     isInitializing,
     login,
+    loginWithToken,
     updateUser,
     logout,
   }

@@ -15,6 +15,7 @@ from ..services.schema_introspection import get_table_column_rules
 from ..services.rule_parser import extract_text  # ✅ Correct import
 from ..services.groq_service import parse_rules_to_json, get_ai_response
 from ..services.example_utils import build_rules_with_examples
+from ..services.task_validator import validate_task_definition
 
 from ..services.skill_engine_service import get_rules_for_task, parse_task_rules
 
@@ -80,6 +81,34 @@ def _store_rules_with_examples(task, rules_text: str):
             metadata = {}
     if rules:
         metadata["parsed_rules"] = rules
+
+        # Flag, don't block: an under-specified rule still saves and
+        # activates normally, but the admin who authored it can see
+        # exactly which rules the engine cannot judge reliably instead
+        # of finding out from a user mid-walkthrough.
+        try:
+            validation_report = validate_task_definition(rules)
+        except Exception:
+            logger.exception(
+                "Could not validate the task definition for task '%s'",
+                getattr(task, "name", "unknown"),
+            )
+            validation_report = None
+
+        if validation_report is not None:
+            metadata["validation_report"] = validation_report
+
+            if validation_report["issue_count"]:
+                logger.warning(
+                    "Task '%s' has %d rule(s) that may be underspecified: %s",
+                    getattr(task, "name", "unknown"),
+                    validation_report["issue_count"],
+                    ", ".join(
+                        issue["rule_name"]
+                        for issue in validation_report["issues"]
+                    ),
+                )
+
         task.category_metadata = json.dumps(metadata)
     return rules
 
@@ -120,6 +149,10 @@ def _task_to_response(task: ConfigurationTask) -> dict:
         except (json.JSONDecodeError, TypeError, ValueError):
             rules_content = None
 
+    validation_report = None
+    if isinstance(category_metadata, dict):
+        validation_report = category_metadata.get("validation_report")
+
     return {
         "id": task.id,
         "name": task.name,
@@ -135,6 +168,7 @@ def _task_to_response(task: ConfigurationTask) -> dict:
         "category_metadata": category_metadata,
         "rules_document_filename": task.rules_document_filename if hasattr(task, 'rules_document_filename') else None,
         "rules_content": rules_content,
+        "validation_report": validation_report,
         "is_active": task.is_active,
         "created_at": task.created_at,
         "template_data": None,
@@ -155,8 +189,8 @@ def create_task(
 ):
     """
     Create a new configuration task. Admin only — everyone else can
-    still list, view, run and even edit/delete existing tasks; only
-    defining a new one is restricted.
+    still list, view, and run existing tasks; creating, editing, and
+    deleting tasks is restricted to admins.
     - For 'report_analyses' category: Excel template is required
     - For 'skill_engine' category: Rules document is required
     """
@@ -355,10 +389,10 @@ def update_task(
     file: UploadFile = File(None),
     rules_file: UploadFile = File(None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin_user),
 ):
     """
-    Update an existing configuration task.
+    Update an existing configuration task. Admin only.
     """
     task = db.query(ConfigurationTask).filter(ConfigurationTask.id == task_id).first()
     if not task:
@@ -455,10 +489,10 @@ def update_task(
 def delete_task(
     task_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin_user),
 ):
     """
-    Delete a configuration task by ID (soft delete).
+    Delete a configuration task by ID (soft delete). Admin only.
     """
     task = db.query(ConfigurationTask).filter(ConfigurationTask.id == task_id).first()
 

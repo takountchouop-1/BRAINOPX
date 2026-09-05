@@ -20,6 +20,7 @@ import ErrorIconImport from '@mui/icons-material/Error'
 import CloseIconImport from '@mui/icons-material/Close'
 import NotificationsIconImport from '@mui/icons-material/Notifications'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { fetchNotifications, markAsRead, markAllAsRead } from '../services/NotificationService'
 
 const InfoIcon = InfoIconImport?.default || InfoIconImport
@@ -37,6 +38,7 @@ const typeConfig = {
 }
 
 const NotificationsPanel = ({ open, onClose, onUnreadCountChange }) => {
+  const { t } = useTranslation('components')
   const [notifications, setNotifications] = useState([])
   const [loading, setLoading] = useState(false)
   const panelRef = useRef(null)
@@ -115,10 +117,10 @@ const NotificationsPanel = ({ open, onClose, onUnreadCountChange }) => {
     const diffHours = Math.floor(diffMs / 3600000)
     const diffDays = Math.floor(diffMs / 86400000)
 
-    if (diffMins < 1) return 'Just now'
-    if (diffMins < 60) return `${diffMins}m ago`
-    if (diffHours < 24) return `${diffHours}h ago`
-    if (diffDays < 7) return `${diffDays}d ago`
+    if (diffMins < 1) return t('notificationsPanel.justNow')
+    if (diffMins < 60) return t('notificationsPanel.minutesAgo', { count: diffMins })
+    if (diffHours < 24) return t('notificationsPanel.hoursAgo', { count: diffHours })
+    if (diffDays < 7) return t('notificationsPanel.daysAgo', { count: diffDays })
     return date.toLocaleDateString()
   }
 
@@ -158,7 +160,7 @@ const NotificationsPanel = ({ open, onClose, onUnreadCountChange }) => {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <NotificationsIcon fontSize="small" sx={{ color: 'text.secondary' }} />
           <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'text.primary' }}>
-            Notifications
+            {t('notificationsPanel.title')}
           </Typography>
           {notifications.filter((n) => !n.is_read).length > 0 && (
             <Chip
@@ -187,7 +189,7 @@ const NotificationsPanel = ({ open, onClose, onUnreadCountChange }) => {
                 minWidth: 'auto',
               }}
             >
-              Mark all read
+              {t('notificationsPanel.markAllRead')}
             </Button>
           )}
           <IconButton size="small" onClick={onClose}>
@@ -206,7 +208,7 @@ const NotificationsPanel = ({ open, onClose, onUnreadCountChange }) => {
           <Box sx={{ py: 4, textAlign: 'center' }}>
             <NotificationsIcon sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
             <Typography variant="body2" color="text.secondary">
-              No notifications yet
+              {t('notificationsPanel.noNotifications')}
             </Typography>
           </Box>
         ) : (
