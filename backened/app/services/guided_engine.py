@@ -27,11 +27,13 @@ that keeps internal rule definitions hidden.
 """
 
 import logging
+import re
 from typing import Optional
 
 from app.services.groq_service import (
     run_rule_workflow,
     run_rule_followup,
+    get_chitchat_reply,
     generate_rule_example_with_retry,
     deterministic_validate_example,
     GroqNetworkError,
@@ -51,6 +53,11 @@ logger = logging.getLogger(__name__)
 # before the AI stops re-explaining in words and asks for a file or
 # screenshot instead.
 CONFUSION_THRESHOLD = 2
+
+# Consecutive genuinely-wrong values on the same step (not off-track
+# chatter) before the AI stops repeating "how to fix" and offers to
+# escalate to a human instead.
+MAX_FAILED_ATTEMPTS = 3
 
 
 # ============================================================
@@ -127,6 +134,12 @@ def build_step(rule: dict, index: int) -> dict:
         "status": "active" if index == 0 else "pending",
 
         "attempts": 0,
+
+        # Consecutive genuinely-wrong values in a row, not counting
+        # off-track chatter — reset to 0 by any passed/warning/skip.
+        # Drives the escalate-to-expert offer once it hits
+        # MAX_FAILED_ATTEMPTS.
+        "failed_streak": 0,
 
         "last_verdict": None,
 
@@ -370,6 +383,36 @@ def ensure_collection_started(step: dict) -> dict:
     return progress
 
 
+def _explain_for(rule: dict, value: str, conversation: list) -> str:
+    """
+    Ask the model to explain a rule in plain language, tolerating a
+    Groq outage the same way every other explanation call site does.
+
+    Shared by every parked state that can be interrupted with an
+    explanation request — a step waiting on a yes/no, an advance
+    confirmation, or one field of a table/list.
+    """
+
+    try:
+        return run_rule_followup(
+            rule=rule,
+            user_message=value,
+            conversation_history=conversation,
+        )
+    except GroqNetworkError:
+        logger.warning(
+            "Groq unreachable while explaining '%s'",
+            (rule or {}).get("name") or (rule or {}).get("rule_name") or "unknown",
+        )
+    except Exception:
+        logger.exception(
+            "Explanation failed for '%s'",
+            (rule or {}).get("name") or (rule or {}).get("rule_name") or "unknown",
+        )
+
+    return ""
+
+
 # ============================================================
 # ONE TURN OF THE WALKTHROUGH
 # ============================================================
@@ -422,13 +465,17 @@ def _advance_to_next_step(
     step: dict,
     value: str,
     verdict: dict,
+    skipped: bool = False,
 ) -> dict:
     """
-    Complete the current step and open the next one.
+    Complete the current step and open the next one immediately, in
+    the same reply — confirmation and the next step's prompt travel
+    together with no separate "ready?" turn in between.
 
-    Shared by a PASSED turn and a WARNING accepted via
-    _take_warning_acceptance_turn — both end the step the same way,
-    just with a different verdict attached.
+    Shared by a PASSED turn, a WARNING accepted via
+    _take_warning_acceptance_turn, and a step skipped via
+    _wants_to_skip_step — all three end the step the same way, just
+    with different confirmation wording and verdict attached.
     """
 
     total = len(steps)
@@ -437,13 +484,17 @@ def _advance_to_next_step(
     step["user_value"] = value
     step["off_track_count"] = 0
 
+    if skipped:
+        step["skipped"] = True
+
     # The user just recovered from an error. Remember how, so the
     # next person who hits the same kind of error can be told.
-    # Only values that have passed validation reach here.
+    # Only values that have passed validation reach here. A skipped
+    # step was never fixed, so there is nothing to record.
 
     rejected = str(step.get("last_rejected") or "").strip()
 
-    if rejected:
+    if rejected and not skipped:
         try:
             correction_memory.record_correction(
                 step=step,
@@ -457,8 +508,21 @@ def _advance_to_next_step(
                 step.get("rule_name", "unknown"),
             )
 
+    if rejected:
         step.pop("last_rejected", None)
         step.pop("last_failed_verdict", None)
+
+    confirmation = (
+        presenter.build_skip_message(step, current_index, total)
+        if skipped
+        else presenter.build_success_message(
+            step,
+            current_index,
+            total,
+            next_step=None,
+            submitted_value=value,
+        )
+    )
 
     next_index = current_index + 1
 
@@ -469,10 +533,6 @@ def _advance_to_next_step(
 
         next_rule = find_rule(rules, next_step.get("rule_id"))
 
-        # The next step's example is built from the NEXT rule.
-        # This is the step both engines previously got wrong in
-        # different ways.
-
         prepare_example(
             next_step,
             next_rule,
@@ -481,42 +541,25 @@ def _advance_to_next_step(
 
         ensure_collection_started(next_step)
 
+        blocks = (
+            confirmation
+            + presenter.build_moving_on_message(next_step, next_index, total)
+            + presenter.build_step_prompt(next_step, next_index, total)
+        )
+
         return {
             "passed": True,
             "current_index": next_index,
             "all_completed": False,
-            "message_blocks": presenter.build_success_message(
-                step,
-                current_index,
-                total,
-                next_step=next_step,
-                submitted_value=value,
-            ),
-            "message_lines": presenter.lines_of(
-                presenter.build_success_message(
-                    step,
-                    current_index,
-                    total,
-                    next_step=next_step,
-                    submitted_value=value,
-                )
-            ),
+            "message_blocks": blocks,
+            "message_lines": presenter.lines_of(blocks),
             "step": step,
             "next_step": next_step,
             "verdict": verdict,
             "public_verdict": presenter.public_verdict(verdict),
         }
 
-    final_blocks = (
-        presenter.build_success_message(
-            step,
-            current_index,
-            total,
-            next_step=None,
-            submitted_value=value,
-        )
-        + presenter.build_all_completed_message(total)
-    )
+    final_blocks = confirmation + presenter.build_all_completed_message(total)
 
     return {
         "passed": True,
@@ -535,19 +578,56 @@ def _advance_to_next_step(
 # WARNING ACCEPT / DECLINE
 # ============================================================
 
-_YES_WORDS = {"yes", "y", "accept", "confirm", "continue", "proceed", "ok", "okay"}
-_NO_WORDS = {"no", "n", "decline", "cancel", "different", "change", "reject"}
+_YES_WORDS = {
+    "yes", "y", "yeah", "yep", "yup", "accept", "confirm", "continue",
+    "proceed", "ok", "okay", "alright", "fine", "sure",
+}
+_NO_WORDS = {"no", "n", "nope", "decline", "cancel", "different", "change", "reject"}
+
+# Natural sentences that mean the same as a bare yes/no, so the user
+# is not forced to answer in a single keyword — e.g. "I'll continue
+# with this file" or "let's just go with it" both mean yes.
+_YES_PATTERNS = (
+    r"\b(i'?ll|i\s+will|let'?s|lets)\s+"
+    r"(continue|keep|stick|proceed|go)\b",
+    r"\bkeep(ing)?\s+(this|it|the\s+same)\b",
+    r"\bgo\s+(ahead|with\s+(this|it))\b",
+    r"\bthat'?s\s+fine\b",
+    r"\b(i'?m|im)\s+(ok|okay|fine|good)\s+with\s+(this|it)\b",
+)
+_NO_PATTERNS = (
+    r"\b(let\s+me|i'?ll|i'd|i\s+want\s+to)\s+"
+    r"(try|use|pick)\s+(something|a\s+different|another)\b",
+    r"\bi'?d\s+rather\s+(not|change|use\s+something\s+else)\b",
+    r"\bnot\s+this\s+one\b",
+    r"\bsomething\s+else\b",
+    r"\b(different|another)\s+(one|value|file)\b",
+)
 
 
 def _classify_yes_no(value: str) -> str:
-    """Whether a reply to a WARNING's accept/decline prompt means yes or no."""
+    """
+    Whether a reply to a WARNING's accept/decline prompt means yes or
+    no.
+
+    Not limited to a fixed word list — a full sentence in the user's
+    own words ("I'll continue with this file") is read the same way
+    as a bare "yes".
+    """
 
     lowered = value.strip().lower()
 
-    if lowered in _YES_WORDS:
+    if not lowered:
+        return "unclear"
+
+    if lowered in _YES_WORDS or any(
+        re.search(pattern, lowered) for pattern in _YES_PATTERNS
+    ):
         return "yes"
 
-    if lowered in _NO_WORDS:
+    if lowered in _NO_WORDS or any(
+        re.search(pattern, lowered) for pattern in _NO_PATTERNS
+    ):
         return "no"
 
     return "unclear"
@@ -567,6 +647,26 @@ def _take_warning_acceptance_turn(
 
     total = len(steps)
     value = str(user_input or "").strip()
+
+    # Asking to skip outright, rather than accepting or declining the
+    # flagged value, still has to work while a WARNING is parked here —
+    # otherwise an optional step whose risky value was declined-in-spirit
+    # ("no error", then "skip this") loops on the same accept/decline
+    # prompt forever, since neither reads as a plain yes or no.
+    if _wants_to_skip_step(value) and _step_is_optional(rule):
+
+        step.pop("awaiting_risk_acceptance", None)
+
+        return _advance_to_next_step(
+            steps=steps,
+            current_index=current_index,
+            rules=rules,
+            step=step,
+            value="",
+            verdict={"status": "skipped", "passed": True},
+            skipped=True,
+        )
+
     decision = _classify_yes_no(value)
 
     if decision == "yes":
@@ -617,11 +717,23 @@ def _take_warning_acceptance_turn(
             "public_verdict": {"status": "failed", "passed": False},
         }
 
-    # Unclear reply: repeat the same accept/decline prompt unchanged.
+    # Unclear reply: might be a question about why this was flagged
+    # rather than an unrecognized yes/no. Answered in place, then the
+    # same accept/decline prompt is shown again unchanged.
 
     verdict = awaiting.get("verdict") or {}
 
-    blocks = presenter.build_warning_message(
+    explanation_blocks: list[dict] = []
+
+    if input_intent.is_question(value):
+        explanation = _explain_for(rule, value, step.get("conversation", []))
+
+        if explanation:
+            explanation_blocks = presenter.build_step_explanation_message(
+                explanation,
+            )
+
+    blocks = explanation_blocks + presenter.build_warning_message(
         step,
         current_index,
         total,
@@ -644,6 +756,114 @@ def _take_warning_acceptance_turn(
     }
 
 
+# ============================================================
+# ESCALATE-TO-EXPERT CHOICE
+# ============================================================
+
+_ESCALATE_WORDS = {"1", "escalate", "expert", "escalate to expert", "help"}
+_RETRY_WORDS = {"2", "try again", "retry", "try", "again"}
+
+
+def _classify_escalation_choice(value: str) -> str:
+    """Whether a reply to the escalation menu picked [1] or [2]."""
+
+    lowered = value.strip().lower().rstrip(".")
+
+    if lowered in _ESCALATE_WORDS:
+        return "escalate"
+
+    if lowered in _RETRY_WORDS:
+        return "retry"
+
+    return "unclear"
+
+
+def _take_escalation_choice_turn(
+    *,
+    steps: list[dict],
+    current_index: int,
+    rules: list[dict],
+    user_input: str,
+    step: dict,
+    escalation: dict,
+) -> dict:
+    """One turn while a step is parked awaiting an escalation choice."""
+
+    total = len(steps)
+    value = str(user_input or "").strip()
+    choice = _classify_escalation_choice(value)
+
+    if choice == "escalate":
+
+        attempts = int(step.get("failed_streak", 0))
+        verdict = escalation.get("verdict") or {}
+
+        step.pop("awaiting_escalation_choice", None)
+        step["failed_streak"] = 0
+        step["escalated"] = True
+
+        blocks = presenter.build_escalation_summary_message(
+            step, current_index, total, attempts, verdict,
+        )
+
+        return {
+            "passed": False,
+            "current_index": current_index,
+            "all_completed": False,
+            "handled": True,
+            "intent": "escalated",
+            "message_blocks": blocks,
+            "message_lines": presenter.lines_of(blocks),
+            "step": step,
+            "next_step": None,
+            "verdict": verdict,
+            "public_verdict": presenter.public_verdict(verdict),
+        }
+
+    if choice == "retry":
+
+        step.pop("awaiting_escalation_choice", None)
+        step["failed_streak"] = 0
+
+        blocks = presenter.build_escalation_retry_message(
+            step, current_index, total,
+        )
+
+        return {
+            "passed": False,
+            "current_index": current_index,
+            "all_completed": False,
+            "handled": True,
+            "intent": "escalation_retry",
+            "message_blocks": blocks,
+            "message_lines": presenter.lines_of(blocks),
+            "step": step,
+            "next_step": None,
+            "verdict": {"status": "failed", "passed": False},
+            "public_verdict": {"status": "failed", "passed": False},
+        }
+
+    # Unclear reply — repeat the same menu unchanged.
+
+    blocks = presenter.build_escalation_unclear_message(
+        step, current_index, total,
+    )
+
+    return {
+        "passed": False,
+        "current_index": current_index,
+        "all_completed": False,
+        "handled": True,
+        "intent": "escalation_offered",
+        "message_blocks": blocks,
+        "message_lines": presenter.lines_of(blocks),
+        "step": step,
+        "next_step": None,
+        "verdict": {"status": "failed", "passed": False},
+        "public_verdict": {"status": "failed", "passed": False},
+    }
+
+
 _SKIP_ATTACHMENT_WORDS = {"skip", "no", "never mind", "nevermind", "cancel"}
 
 
@@ -651,20 +871,23 @@ def _take_awaiting_attachment_turn(
     *,
     steps: list[dict],
     current_index: int,
+    rules: list[dict],
     step: dict,
     user_input: str,
 ) -> dict:
     """
     One turn while a step is parked waiting for the file/screenshot
     the AI asked for. A plain-text reply here is never judged as a
-    value — only "skip" resumes ordinary validation, and anything else
-    just repeats the reminder. The actual attachment arrives through
-    resolve_attachment(), a separate entry point the router calls once
-    the upload has been read.
+    value — only "skip" resumes ordinary validation, a question is
+    answered without resuming it, and anything else just repeats the
+    reminder. The actual attachment arrives through resolve_attachment(),
+    a separate entry point the router calls once the upload has been
+    read.
     """
 
     total = len(steps)
-    value = str(user_input or "").strip().lower()
+    raw_value = str(user_input or "").strip()
+    value = raw_value.lower()
 
     if value in _SKIP_ATTACHMENT_WORDS:
         step.pop("awaiting_attachment", None)
@@ -686,7 +909,20 @@ def _take_awaiting_attachment_turn(
             "public_verdict": {"status": "failed", "passed": False},
         }
 
-    blocks = presenter.build_awaiting_attachment_reminder_message(step, current_index, total)
+    explanation_blocks: list[dict] = []
+
+    if input_intent.is_question(raw_value):
+        rule = find_rule(rules, step.get("rule_id")) or step
+        explanation = _explain_for(rule, raw_value, step.get("conversation", []))
+
+        if explanation:
+            explanation_blocks = presenter.build_step_explanation_message(
+                explanation,
+            )
+
+    blocks = explanation_blocks + presenter.build_awaiting_attachment_reminder_message(
+        step, current_index, total,
+    )
 
     return {
         "passed": False,
@@ -773,6 +1009,50 @@ def resolve_attachment(
     }
 
 
+_SKIP_STEP_WORDS = {"skip", "n/a", "na", "not applicable"}
+
+# Phrases that ask to move past the current step outright, rather
+# than answering it — e.g. "skip this", "go to the next step". Kept
+# narrow and explicit on purpose: a bare "no" or "next" is left alone
+# here since either could be a real answer to some step.
+_SKIP_STEP_PATTERNS = (
+    r"\bskip\s+(this|it|that)\b",
+    r"\b(go|move|jump)\s+(on\s+)?to\s+the\s+next\s+step\b",
+    r"\bnext\s+step\s*,?\s*please\b",
+    r"\bcan\s+(i|we)\s+skip\b",
+    r"\bi'?ll\s+skip\s+(this|it)\b",
+    r"\bi\s+don'?t\s+have\s+(this|that|it)\b",
+    r"\bleave\s+(this|it)\s+(blank|empty|out)\b",
+)
+
+
+def _wants_to_skip_step(value: str) -> bool:
+    """Whether the user is asking to move past this step, not answer it."""
+
+    lowered = value.strip().lower()
+
+    if not lowered:
+        return False
+
+    if lowered in _SKIP_STEP_WORDS:
+        return True
+
+    return any(re.search(pattern, lowered) for pattern in _SKIP_STEP_PATTERNS)
+
+
+def _step_is_optional(rule: dict) -> bool:
+    """Whether this step's own rule allows moving on with no answer at all."""
+
+    try:
+        from app.services.groq_service import _get_effective_constraints
+
+        constraints = _get_effective_constraints(rule)
+    except Exception:
+        return False
+
+    return constraints.get("required", True) is False
+
+
 def take_turn(
     *,
     steps: list[dict],
@@ -847,6 +1127,21 @@ def take_turn(
             awaiting=awaiting,
         )
 
+    # Repeated failures on this step already offered escalation —
+    # parked here awaiting the user's [1]/[2] choice, rather than
+    # being judged again as a fresh value against the rule.
+    escalation = step.get("awaiting_escalation_choice")
+
+    if isinstance(escalation, dict):
+        return _take_escalation_choice_turn(
+            steps=steps,
+            current_index=current_index,
+            rules=rules,
+            user_input=user_input,
+            step=step,
+            escalation=escalation,
+        )
+
     # A step parked waiting for the file/screenshot the AI asked for
     # (see _asks_for_attachment below) never reaches ordinary judgment
     # for a plain-text turn — only a real attachment (handled by
@@ -856,11 +1151,46 @@ def take_turn(
         return _take_awaiting_attachment_turn(
             steps=steps,
             current_index=current_index,
+            rules=rules,
             step=step,
             user_input=user_input,
         )
 
     value = str(user_input or "").strip()
+
+    # The user is asking to move past this step rather than answer
+    # it. Only honoured when the step's own rule does not require a
+    # value — an obligatory step is explained and re-shown instead.
+    if _wants_to_skip_step(value):
+
+        if _step_is_optional(rule):
+            return _advance_to_next_step(
+                steps=steps,
+                current_index=current_index,
+                rules=rules,
+                step=step,
+                value="",
+                verdict={"status": "skipped", "passed": True},
+                skipped=True,
+            )
+
+        cannot_skip_blocks = presenter.build_cannot_skip_message(
+            step, current_index, total,
+        )
+
+        return {
+            "passed": False,
+            "current_index": current_index,
+            "all_completed": False,
+            "handled": True,
+            "intent": "skip_declined",
+            "message_blocks": cannot_skip_blocks,
+            "message_lines": presenter.lines_of(cannot_skip_blocks),
+            "step": step,
+            "next_step": None,
+            "verdict": {"status": "failed", "passed": False},
+            "public_verdict": {"status": "failed", "passed": False},
+        }
 
     known_example = str(step.get("suggested_example") or "").strip()
 
@@ -979,6 +1309,7 @@ def take_turn(
     # not a strike against the user.
     if status in ("passed", "warning"):
         step["attempts"] = int(step.get("attempts", 0)) + 1
+        step["failed_streak"] = 0
 
     # --------------------------------------------------------
     # Passed: complete this step, open the next
@@ -1153,6 +1484,26 @@ def take_turn(
                     step.get("rule_name", "unknown"),
                 )
 
+        # A greeting or small talk mid-walkthrough gets a real, warm
+        # reply instead of the same static line every time — falls back
+        # to step_presenter's canned line if Groq is unreachable.
+        elif intent == input_intent.CHITCHAT:
+            try:
+                ai_explanation = get_chitchat_reply(
+                    user_message=value,
+                    step_label=step.get("rule_name") or step.get("name") or "",
+                )
+            except GroqNetworkError:
+                logger.warning(
+                    "Groq unreachable while replying to chitchat on step '%s'",
+                    step.get("rule_name", "unknown"),
+                )
+            except Exception:
+                logger.exception(
+                    "Chitchat reply failed for step '%s'",
+                    step.get("rule_name", "unknown"),
+                )
+
         off_track = presenter.build_off_track_message(
             step,
             current_index,
@@ -1181,6 +1532,7 @@ def take_turn(
 
     step["off_track_count"] = 0
     step["attempts"] = int(step.get("attempts", 0)) + 1
+    step["failed_streak"] = int(step.get("failed_streak", 0)) + 1
 
     # Held so that, if the next value succeeds, the pair can be
     # learned as a way past this error.
@@ -1188,6 +1540,30 @@ def take_turn(
     step["last_failed_verdict"] = {
         "validation_errors": verdict.get("validation_errors", []),
     }
+
+    # The same step has failed too many times in a row — stop
+    # repeating "how to fix" and offer to escalate instead.
+    if step["failed_streak"] >= MAX_FAILED_ATTEMPTS:
+
+        step["awaiting_escalation_choice"] = {"verdict": verdict}
+
+        escalation_blocks = presenter.build_escalation_offer_message(
+            step, current_index, total, step["failed_streak"],
+        )
+
+        return {
+            "passed": False,
+            "current_index": current_index,
+            "all_completed": False,
+            "handled": True,
+            "intent": "escalation_offered",
+            "message_blocks": escalation_blocks,
+            "message_lines": presenter.lines_of(escalation_blocks),
+            "step": step,
+            "next_step": None,
+            "verdict": verdict,
+            "public_verdict": presenter.public_verdict(verdict),
+        }
 
     try:
         # The rule is passed so a remembered value is only offered
@@ -1335,6 +1711,16 @@ def _take_table_collection_turn(
     columns = composite_rules.columns_of(step)
     column = columns[progress["column_index"]]
 
+    if input_intent.is_question(value):
+        explanation = _explain_for(column, value, step.get("conversation", []))
+
+        if explanation:
+            return _collection_stay_put(
+                step, current_index,
+                presenter.build_step_explanation_message(explanation)
+                + presenter.build_collection_prompt(step, current_index, total),
+            )
+
     errors = composite_rules._validate_cell(value, column)
 
     if errors:
@@ -1394,6 +1780,17 @@ def _take_list_collection_turn(
         )
 
     item_rule = composite_rules.item_rule_of(step)
+
+    if input_intent.is_question(value):
+        explanation = _explain_for(item_rule, value, step.get("conversation", []))
+
+        if explanation:
+            return _collection_stay_put(
+                step, current_index,
+                presenter.build_step_explanation_message(explanation)
+                + presenter.build_collection_prompt(step, current_index, total),
+            )
+
     errors = composite_rules._validate_cell(value, item_rule)
 
     if errors:

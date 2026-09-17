@@ -501,7 +501,12 @@ const TaskManagement = ({ searchTerm = '', setSearchTerm = () => {} }) => {
 
     setIsSubmitting(true)
     try {
-      const taskData = { name, description, category, file }
+      const taskData = {
+        name,
+        description,
+        category,
+        file,
+      }
       if (dialogMode === 'create') {
         await createTask(taskData)
         setSnackbar({ open: true, message: t('taskManagement.messages.taskCreated'), severity: 'success' })
@@ -553,7 +558,7 @@ const TaskManagement = ({ searchTerm = '', setSearchTerm = () => {} }) => {
     setTaskToDelete(null)
   }
 
-  const getFileAccept = (type) => (type === 'skill_engine' ? '.txt,.pdf,.doc,.docx' : '.xlsx')
+  const getFileAccept = (type) => (type === 'skill_engine' ? '.txt,.pdf,.doc,.docx' : '.xlsx,.xlsm')
 
   return (
     <Box sx={{ p: 3 }}>

@@ -3,7 +3,7 @@
   "patterns": {
     "value must start with 'X'": {
       "signature": "value must start with 'X'",
-      "seen": 129,
+      "seen": 130,
       "corrections": [
         {
           "accepted": "TRF123",
@@ -16,7 +16,7 @@
           "accepted": "TRF042",
           "rejected": "NOPE",
           "step": "Tariff Code",
-          "count": 58,
+          "count": 59,
           "first_seen": "2026-08-13T14:25:53"
         },
         {
@@ -41,7 +41,7 @@
           "first_seen": "2026-08-14T15:26:42"
         }
       ],
-      "last_seen": "2026-08-29T19:31:32"
+      "last_seen": "2026-09-07T11:12:07"
     },
     "value cannot be a generic placeholder": {
       "signature": "value cannot be a generic placeholder",
@@ -774,6 +774,202 @@
       "seen": 1,
       "corrections": [],
       "last_seen": "2026-09-05T16:13:26",
+      "withheld": 1
+    },
+    "value must start with 'X' followed by exactly N digits (e.g., trf123)": {
+      "signature": "value must start with 'X' followed by exactly N digits (e.g., trf123)",
+      "seen": 2,
+      "corrections": [
+        {
+          "accepted": "TRF042",
+          "rejected": "WRONG9",
+          "step": "Tariff Code",
+          "count": 2,
+          "first_seen": "2026-09-07T10:48:31"
+        }
+      ],
+      "last_seen": "2026-09-07T11:13:33"
+    },
+    "value must be exactly 'X', 'X', or 'X'": {
+      "signature": "value must be exactly 'X', 'X', or 'X'",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "windows",
+          "rejected": "have Mac",
+          "step": "Operating System",
+          "count": 1,
+          "first_seen": "2026-09-07T10:50:51"
+        }
+      ],
+      "last_seen": "2026-09-07T10:50:51"
+    },
+    "a file upload is required; the value provided is a text message": {
+      "signature": "a file upload is required; the value provided is a text message",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "brain.exe",
+          "rejected": "please have downloaded it let go to the next step",
+          "step": "Installer File",
+          "count": 1,
+          "first_seen": "2026-09-07T10:58:38"
+        }
+      ],
+      "last_seen": "2026-09-07T10:58:38"
+    },
+    "the value does not confirm the download is complete": {
+      "signature": "the value does not confirm the download is complete",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "true",
+          "rejected": "don't understand this step",
+          "step": "Download Confirmation",
+          "count": 1,
+          "first_seen": "2026-09-07T11:00:29"
+        }
+      ],
+      "last_seen": "2026-09-07T11:00:29"
+    },
+    "value does not start with 'X'": {
+      "signature": "value does not start with 'X'",
+      "seen": 4,
+      "corrections": [
+        {
+          "accepted": "TRF042",
+          "rejected": "WRONG9",
+          "step": "Tariff Code",
+          "count": 4,
+          "first_seen": "2026-09-07T11:01:51"
+        }
+      ],
+      "last_seen": "2026-09-07T12:05:31"
+    },
+    "a file upload is required; 'X' is not a file": {
+      "signature": "a file upload is required; 'X' is not a file",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "brain.exe",
+          "rejected": "have install next",
+          "step": "Installer File",
+          "count": 1,
+          "first_seen": "2026-09-07T11:19:32"
+        }
+      ],
+      "last_seen": "2026-09-07T11:19:32"
+    },
+    "value must be exactly 'X' or 'X'": {
+      "signature": "value must be exactly 'X' or 'X'",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "Unofficial",
+          "rejected": "I'm not understanding",
+          "step": "Download Source Warning",
+          "count": 1,
+          "first_seen": "2026-09-07T11:22:36"
+        }
+      ],
+      "last_seen": "2026-09-07T11:22:36"
+    },
+    "format must be integer, not a string with 'X' suffix": {
+      "signature": "format must be integer, not a string with 'X' suffix",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "8",
+          "rejected": "8gb",
+          "step": "RAM",
+          "count": 1,
+          "first_seen": "2026-09-07T11:33:35"
+        }
+      ],
+      "last_seen": "2026-09-07T11:33:35"
+    },
+    "'X' is not in the allowed values list; allowed values are 'X' and 'X'": {
+      "signature": "'X' is not in the allowed values list; allowed values are 'X' and 'X'",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "SUCCESS",
+          "rejected": "success",
+          "step": "Installation Result",
+          "count": 1,
+          "first_seen": "2026-09-07T11:35:32"
+        }
+      ],
+      "last_seen": "2026-09-07T11:35:32"
+    },
+    "value must be a numeric response time in milliseconds, not text": {
+      "signature": "value must be a numeric response time in milliseconds, not text",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "200",
+          "rejected": "provide me suggestion inorder optimise it",
+          "step": "Connection Response Time",
+          "count": 1,
+          "first_seen": "2026-09-11T15:55:30"
+        }
+      ],
+      "last_seen": "2026-09-11T15:55:30"
+    },
+    "value 'X' does not start with the required prefix 'X' and lacks the required N digits after the prefix": {
+      "signature": "value 'X' does not start with the required prefix 'X' and lacks the required N digits after the prefix",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "TRF042",
+          "rejected": "WRONG9",
+          "step": "Tariff Code",
+          "count": 1,
+          "first_seen": "2026-09-11T16:14:05"
+        }
+      ],
+      "last_seen": "2026-09-11T16:14:05"
+    },
+    "'X' does not start with 'X' and contains no digits": {
+      "signature": "'X' does not start with 'X' and contains no digits",
+      "seen": 1,
+      "corrections": [
+        {
+          "accepted": "TRF042",
+          "rejected": "NOPE",
+          "step": "Tariff Code",
+          "count": 1,
+          "first_seen": "2026-09-11T16:14:21"
+        }
+      ],
+      "last_seen": "2026-09-11T16:14:21"
+    },
+    "value 'X' does not start with the required prefix 'X' and does not contain exactly N digits after the prefix": {
+      "signature": "value 'X' does not start with the required prefix 'X' and does not contain exactly N digits after the prefix",
+      "seen": 2,
+      "corrections": [
+        {
+          "accepted": "TRF042",
+          "rejected": "WRONG9",
+          "step": "Tariff Code",
+          "count": 2,
+          "first_seen": "2026-09-11T16:29:49"
+        }
+      ],
+      "last_seen": "2026-09-11T16:39:39"
+    },
+    "value 'X' is not an integer": {
+      "signature": "value 'X' is not an integer",
+      "seen": 1,
+      "corrections": [],
+      "last_seen": "2026-09-11T16:33:17",
+      "withheld": 1
+    },
+    "value must be one of: windows, mac, linux": {
+      "signature": "value must be one of: windows, mac, linux",
+      "seen": 1,
+      "corrections": [],
+      "last_seen": "2026-09-11T16:35:17",
       "withheld": 1
     }
   }

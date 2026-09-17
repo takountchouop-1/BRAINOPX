@@ -755,7 +755,12 @@ def process_step_input(
     if turn["passed"]:
         rule = rules[current_step]
         rule["completed"] = True
-        rule["user_value"] = user_message
+        # turn["step"]'s own user_value is the authoritative accepted
+        # value — user_message here may just be a warning's "yes",
+        # not the actual answer.
+        rule["user_value"] = str(
+            turn["step"].get("user_value", user_message)
+        )
         rules[current_step] = rule
 
     workflow["rules"] = rules

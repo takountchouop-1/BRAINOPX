@@ -21,7 +21,7 @@ const Landingpage = () => {
           position: relative;
           overflow-x: hidden;
           box-sizing: border-box;
-          background: linear-gradient(180deg, #050915 0%, #0a1230 28%, #060a1c 55%, #080d22 78%, #060a1c 100%);
+          background: #ffffff;
         }
 
         .lp-hero {
@@ -33,6 +33,8 @@ const Landingpage = () => {
           align-items: center;
           justify-content: center;
           box-sizing: border-box;
+          overflow: hidden;
+          background: linear-gradient(180deg, #ffffff 0%, #eef3ff 18%, #dbe6ff 42%, #bfd4ff 62%, #e6edfb 85%, #ffffff 100%);
         }
 
         .lp-swirl {
@@ -40,6 +42,8 @@ const Landingpage = () => {
           inset: 0;
           z-index: 0;
           pointer-events: none;
+          -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 55%, transparent 92%);
+          mask-image: linear-gradient(to bottom, #000 0%, #000 55%, transparent 92%);
         }
         .lp-swirl::before,
         .lp-swirl::after {
@@ -84,9 +88,10 @@ const Landingpage = () => {
         }
 
         .lp-nav { position:absolute; top:24px; right:24px; display:flex; gap:12px; z-index:20; }
-        .nav-button { padding:10px 20px; border-radius:999px; border:1px solid rgba(255,255,255,0.25); color:#fff; font-weight:600; font-size:14px; cursor:pointer; text-decoration:none; transition: transform .18s ease, background .18s ease, box-shadow .18s ease, border-color .18s ease; background: rgba(255,255,255,0.06); }
-        .nav-button.secondary { background: rgba(255,255,255,0.14); }
-        .nav-button:hover { background: rgba(255,255,255,0.22); border-color: rgba(255,255,255,0.5); box-shadow: 0 12px 30px rgba(110,130,255,0.25); transform: translateY(-1px); }
+        .nav-button { padding:10px 20px; border-radius:999px; border:1px solid rgba(30,40,90,0.18); color:#1a1f3d; font-weight:600; font-size:14px; cursor:pointer; text-decoration:none; transition: transform .18s ease, background .18s ease, box-shadow .18s ease, border-color .18s ease; background: rgba(255,255,255,0.55); backdrop-filter: blur(6px); }
+        .nav-button.secondary { background: linear-gradient(90deg, #6a5bff 0%, #8f5bff 100%); color:#fff; border-color: transparent; }
+        .nav-button:hover { background: rgba(255,255,255,0.85); border-color: rgba(30,40,90,0.35); box-shadow: 0 12px 30px rgba(110,130,255,0.25); transform: translateY(-1px); }
+        .nav-button.secondary:hover { background: linear-gradient(90deg, #6a5bff 0%, #8f5bff 100%); color:#fff; border-color: transparent; box-shadow: 0 12px 30px rgba(110,90,255,0.4); }
 
         .lp-content { width:100%; max-width:820px; display:flex; flex-direction:column; align-items:center; text-align:center; gap:22px; position:relative; z-index:1; }
 
@@ -96,14 +101,14 @@ const Landingpage = () => {
           gap: 10px;
           padding: 8px 20px;
           border-radius: 999px;
-          border: 1px solid rgba(255,255,255,0.18);
-          background: rgba(255,255,255,0.06);
-          color: #d9ddff;
+          border: 1px solid rgba(106,91,255,0.25);
+          background: rgba(106,91,255,0.08);
+          color: #4a3fcf;
           font-size: 13px;
           font-weight: 600;
           letter-spacing: 0.02em;
         }
-        .lp-badge .spark { color: #9aa5ff; font-size: 14px; }
+        .lp-badge .spark { color: #6a5bff; font-size: 14px; }
 
         .lp-title {
           margin: 0;
@@ -112,11 +117,11 @@ const Landingpage = () => {
           font-size: 52px;
           line-height: 1.15;
           font-weight: 800;
-          color: #ffffff;
+          color: #14163a;
           letter-spacing: -0.01em;
         }
         .lp-title .accent {
-          background: linear-gradient(90deg, #ffffff 0%, #c9b8ff 45%, #8fa0ff 100%);
+          background: linear-gradient(90deg, #1a1f5c 0%, #6a5bff 45%, #2f5bff 100%);
           -webkit-background-clip: text;
           background-clip: text;
           -webkit-text-fill-color: transparent;
@@ -132,7 +137,7 @@ const Landingpage = () => {
         .lp-subtitle {
           margin: 0;
           max-width: 560px;
-          color: rgba(215,220,245,0.75);
+          color: rgba(26,32,74,0.65);
           font-size: 16px;
           line-height: 1.6;
           font-weight: 400;
@@ -182,9 +187,9 @@ const Landingpage = () => {
           gap: 8px;
           padding: 10px 18px;
           border-radius: 999px;
-          background: rgba(255,255,255,0.05);
-          border: 1px solid rgba(255,255,255,0.08);
-          color: rgba(225,228,250,0.85);
+          background: rgba(255,255,255,0.5);
+          border: 1px solid rgba(30,40,90,0.1);
+          color: rgba(26,32,74,0.75);
           font-size: 14px;
           font-weight: 600;
         }
@@ -264,11 +269,12 @@ const Landingpage = () => {
           padding: 8px 16px;
           border-radius: 999px;
           background: rgba(255,255,255,0.9);
+          border: 1px solid rgba(20,30,80,0.08);
           color: #1a1a2e;
           font-size: 12px;
           font-weight: 700;
           white-space: nowrap;
-          box-shadow: 0 14px 30px rgba(0,0,0,0.35);
+          box-shadow: 0 14px 30px rgba(0,0,0,0.2);
         }
         .float-pill .mini-avatars {
           display: flex;
@@ -315,7 +321,8 @@ const Landingpage = () => {
           height: 64px;
           border-radius: 999px;
           background: linear-gradient(180deg, #ffffff 0%, #cfd2ff 100%);
-          box-shadow: 0 14px 30px rgba(0,0,0,0.3);
+          border: 1px solid rgba(20,30,80,0.08);
+          box-shadow: 0 14px 30px rgba(0,0,0,0.2);
         }
 
         .float-check { top: 10%; left: 10%; }
@@ -358,11 +365,11 @@ const Landingpage = () => {
           font-size: 40px;
           line-height: 1.25;
           font-weight: 800;
-          color: #fff;
+          color: #14163a;
           max-width: 640px;
         }
         .features-heading .accent {
-          background: linear-gradient(90deg, #ffffff 0%, #c9b8ff 45%, #8fa0ff 100%);
+          background: linear-gradient(90deg, #1a1f5c 0%, #6a5bff 45%, #2f5bff 100%);
           -webkit-background-clip: text;
           background-clip: text;
           -webkit-text-fill-color: transparent;
@@ -372,7 +379,7 @@ const Landingpage = () => {
           margin: 0;
           max-width: 520px;
           text-align: center;
-          color: rgba(215,220,245,0.7);
+          color: rgba(26,32,74,0.65);
           font-size: 15px;
           line-height: 1.6;
         }
@@ -400,9 +407,9 @@ const Landingpage = () => {
           gap: 8px;
           padding: 6px 14px;
           border-radius: 999px;
-          border: 1px solid rgba(140,150,255,0.35);
-          background: rgba(120,110,255,0.12);
-          color: #b9c0ff;
+          border: 1px solid rgba(106,91,255,0.3);
+          background: rgba(120,110,255,0.1);
+          color: #4a3fcf;
           font-size: 11.5px;
           font-weight: 700;
           letter-spacing: 0.04em;
@@ -421,7 +428,7 @@ const Landingpage = () => {
           font-size: 34px;
           line-height: 1.25;
           font-weight: 800;
-          color: #fff;
+          color: #14163a;
         }
         .feature-title .highlight {
           background: linear-gradient(90deg, #a98bff 0%, #8fa0ff 100%);
@@ -433,7 +440,7 @@ const Landingpage = () => {
         .feature-desc {
           margin: 0;
           max-width: 420px;
-          color: rgba(215,220,245,0.7);
+          color: rgba(26,32,74,0.65);
           font-size: 15px;
           line-height: 1.75;
         }
@@ -623,7 +630,7 @@ const Landingpage = () => {
           font-size: 40px;
           line-height: 1.25;
           font-weight: 800;
-          color: #fff;
+          color: #14163a;
           max-width: 640px;
         }
 
@@ -631,7 +638,7 @@ const Landingpage = () => {
           margin: 0;
           max-width: 520px;
           text-align: center;
-          color: rgba(215,220,245,0.7);
+          color: rgba(26,32,74,0.65);
           font-size: 15px;
           line-height: 1.6;
         }
@@ -653,8 +660,9 @@ const Landingpage = () => {
           gap: 16px;
           padding: 24px;
           border-radius: 20px;
-          background: rgba(255,255,255,0.04);
-          border: 1px solid rgba(255,255,255,0.08);
+          background: rgba(255,255,255,0.55);
+          border: 1px solid rgba(30,40,90,0.1);
+          box-shadow: 0 12px 30px rgba(40,60,140,0.08);
           cursor: default;
           transition: background .3s ease, border-color .3s ease, transform .3s ease, box-shadow .3s ease;
         }
@@ -667,9 +675,9 @@ const Landingpage = () => {
           align-items: center;
           justify-content: center;
           font-size: 20px;
-          background: rgba(255,255,255,0.06);
-          border: 1px solid rgba(255,255,255,0.12);
-          color: #b9c0ff;
+          background: rgba(106,91,255,0.08);
+          border: 1px solid rgba(106,91,255,0.25);
+          color: #4a3fcf;
           transition: background .3s ease, border-color .3s ease, color .3s ease;
         }
 
@@ -677,15 +685,16 @@ const Landingpage = () => {
           margin: 0;
           font-size: 16px;
           font-weight: 700;
-          color: #fff;
+          color: #14163a;
           line-height: 1.4;
+          transition: color .3s ease;
         }
 
         .solution-desc {
           margin: 0;
           font-size: 13.5px;
           line-height: 1.6;
-          color: rgba(225,228,250,0.75);
+          color: rgba(26,32,74,0.62);
           transition: color .3s ease;
         }
 
@@ -718,6 +727,10 @@ const Landingpage = () => {
         .solution-card:focus-within .solution-icon {
           background: rgba(255,255,255,0.16);
           border-color: rgba(255,255,255,0.3);
+          color: #fff;
+        }
+        .solution-card:hover .solution-title,
+        .solution-card:focus-within .solution-title {
           color: #fff;
         }
         .solution-card:hover .solution-desc,
@@ -797,12 +810,12 @@ const Landingpage = () => {
           font-size: 40px;
           line-height: 1.25;
           font-weight: 800;
-          color: #fff;
+          color: #14163a;
         }
         .final-cta-subtitle {
           margin: 0;
           max-width: 480px;
-          color: rgba(215,220,245,0.7);
+          color: rgba(26,32,74,0.65);
           font-size: 15px;
           line-height: 1.6;
         }
@@ -843,7 +856,7 @@ const Landingpage = () => {
           font-weight: 700;
           letter-spacing: 0.08em;
           text-transform: uppercase;
-          color: #b9c0ff;
+          color: #4a3fcf;
         }
         .story-kicker::before {
           content: '';
@@ -859,7 +872,7 @@ const Landingpage = () => {
           font-size: 28px;
           line-height: 1.45;
           font-weight: 700;
-          color: #fff;
+          color: #14163a;
           max-width: 460px;
         }
 
@@ -868,8 +881,8 @@ const Landingpage = () => {
           flex-direction: column;
           gap: 4px;
         }
-        .story-author-name { font-size: 14px; font-weight: 700; color: #fff; }
-        .story-author-role { font-size: 13px; color: rgba(215,220,245,0.6); }
+        .story-author-name { font-size: 14px; font-weight: 700; color: #14163a; }
+        .story-author-role { font-size: 13px; color: rgba(26,32,74,0.55); }
 
         .story-media {
           position: relative;
@@ -882,8 +895,8 @@ const Landingpage = () => {
         .story-shot {
           position: absolute;
           border-radius: 16px;
-          border: 1px solid rgba(255,255,255,0.14);
-          box-shadow: 0 30px 60px rgba(0,0,0,0.5);
+          border: 1px solid rgba(20,30,80,0.12);
+          box-shadow: 0 30px 60px rgba(30,50,120,0.2);
         }
         .story-shot-back {
           top: 0;
@@ -913,7 +926,7 @@ const Landingpage = () => {
           justify-content: space-around;
           gap: 24px;
           padding-top: 40px;
-          border-top: 1px solid rgba(255,255,255,0.08);
+          border-top: 1px solid rgba(20,30,80,0.1);
         }
         .story-stat {
           display: flex;
@@ -924,11 +937,11 @@ const Landingpage = () => {
         .story-stat-value {
           font-size: 34px;
           font-weight: 800;
-          color: #fff;
+          color: #14163a;
         }
         .story-stat-label {
           font-size: 12.5px;
-          color: rgba(215,220,245,0.6);
+          color: rgba(26,32,74,0.55);
           text-transform: uppercase;
           letter-spacing: 0.04em;
           text-align: center;
@@ -960,7 +973,7 @@ const Landingpage = () => {
           grid-template-columns: 1.4fr 1fr 1fr 1fr;
           gap: 40px;
           padding: 48px 0 40px;
-          border-top: 1px solid rgba(255,255,255,0.08);
+          border-top: 1px solid rgba(20,30,80,0.1);
         }
 
         .footer-brand {
@@ -975,15 +988,15 @@ const Landingpage = () => {
           gap: 8px;
           font-size: 17px;
           font-weight: 800;
-          color: #fff;
+          color: #14163a;
           letter-spacing: -0.01em;
         }
-        .footer-logo .spark { color: #9aa5ff; font-size: 15px; }
+        .footer-logo .spark { color: #6a5bff; font-size: 15px; }
 
         .footer-tagline {
           margin: 0;
           max-width: 280px;
-          color: rgba(215,220,245,0.6);
+          color: rgba(26,32,74,0.55);
           font-size: 13.5px;
           line-height: 1.6;
         }
@@ -999,14 +1012,14 @@ const Landingpage = () => {
           margin: 0;
           font-size: 14px;
           font-weight: 700;
-          color: #fff;
+          color: #14163a;
         }
 
         .footer-link,
         .footer-text {
           font-size: 13.5px;
           line-height: 1.5;
-          color: rgba(215,220,245,0.65);
+          color: rgba(26,32,74,0.6);
           text-decoration: none;
           background: none;
           border: none;
@@ -1018,7 +1031,7 @@ const Landingpage = () => {
           transition: color .18s ease;
         }
         a.footer-link:hover {
-          color: #fff;
+          color: #4a3fcf;
         }
 
         .footer-bottom {
@@ -1026,12 +1039,12 @@ const Landingpage = () => {
           align-items: center;
           justify-content: center;
           padding-top: 24px;
-          border-top: 1px solid rgba(255,255,255,0.06);
+          border-top: 1px solid rgba(20,30,80,0.08);
         }
 
         .footer-copyright {
           margin: 0;
-          color: rgba(215,220,245,0.5);
+          color: rgba(26,32,74,0.45);
           font-size: 12.5px;
         }
 
@@ -1098,7 +1111,10 @@ const Landingpage = () => {
             py: '10px',
             px: '20px',
             fontSize: 14,
-            borderColor: 'rgba(255,255,255,0.25)',
+            borderColor: 'rgba(30,40,90,0.18)',
+            background: 'rgba(255,255,255,0.55)',
+            color: '#1a1f3d',
+            '&:hover': { background: 'rgba(255,255,255,0.85)' },
           }}
         />
         <Link to="/login" className="nav-button">{t('landingpage.signIn')}</Link>

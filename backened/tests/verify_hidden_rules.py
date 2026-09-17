@@ -104,7 +104,7 @@ scan(started, "init_guided_session")
 
 msg = started["initial_message"]
 check("shows the step heading", "Step 1 of 2" in msg, "Step 1 of 2")
-check("shows what to provide", "Enter the Tariff Code" in msg, "Enter the Tariff Code")
+check("shows what to provide", "get the Tariff Code" in msg, "get the Tariff Code")
 check("shows an example input", "TRF001" in msg, "TRF001")
 check(
     "active_rule exposes what_to_provide, not the rule",
@@ -122,11 +122,9 @@ bad = rr.process_guided_input(db, session_id=sid, user_input="WRONG9", user_id=u
 scan(bad, "invalid submission")
 
 resp = bad["ai_response"]
-check("says it was not accepted", "not accepted" in resp, "not accepted")
-check("says what is missing", "What is missing" in resp, "What is missing")
-check("names the actual problem", "must start with" in resp, "must start with 'TRF'")
+check("names the actual problem", "start with" in resp, "start with 'TRF'")
 check("offers a corrected example", "TRF001" in resp, "TRF001")
-check("asks to try the step again", "again" in resp, "again")
+check("asks to try the step again", "another shot" in resp, "another shot")
 check("stays on the same step", bad["step_index"] == 0, str(bad["step_index"]))
 
 check(
@@ -142,7 +140,7 @@ check(
 
 print()
 print("=" * 72)
-print("STEP 3 — valid input: confirm + next step")
+print("STEP 3 — valid input: confirms and opens the next step immediately")
 print("=" * 72)
 
 good = rr.process_guided_input(db, session_id=sid, user_input="TRF042", user_id=user.id)
@@ -150,28 +148,31 @@ scan(good, "valid submission")
 
 resp = good["ai_response"]
 check("confirms the step", "Tariff Code accepted" in resp, "Tariff Code accepted")
-check("announces the next step", "Step 2 of 2" in resp, "Step 2 of 2")
-check("says what to provide next", "Enter the Unit Rate" in resp, "Enter the Unit Rate")
+check("announces the next step in the same reply", "Step 2 of 2" in resp, "Step 2 of 2")
+check("says what to provide next", "get the Unit Rate" in resp, "get the Unit Rate")
 check("shows the next example", "120.00" in resp, "120.00")
 check(
     "next example is its own, not the previous step's",
     "TRF001" not in resp.split("Step 2 of 2")[-1],
     "no TRF001 after the step-2 heading",
 )
+check("advances to step 2 without a separate confirmation turn", good["current_step_index"] == 1, str(good["current_step_index"]))
 
 print()
 print("=" * 72)
-print("STEP 4 — final step completes the walkthrough")
+print("STEP 4 — final step completes the walkthrough immediately")
 print("=" * 72)
 
+# The last step has no next step to wait to advance into, so it
+# completes on the same turn it passes — no "done" confirmation needed.
 done = rr.process_guided_input(db, session_id=sid, user_input="99.50", user_id=user.id)
 scan(done, "final submission")
 
 check("reports completion", done["all_completed"] is True, str(done["all_completed"]))
 check(
     "final message confirms all steps",
-    "All 2 steps completed" in done["ai_response"],
-    "All 2 steps completed",
+    "All 2 steps passed successfully" in done["ai_response"],
+    "All 2 steps passed successfully",
 )
 
 print()

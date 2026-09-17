@@ -480,7 +480,31 @@ def _call_groq(
             "Groq returned an empty response."
         )
 
-    return content.strip()
+    return _fix_mojibake(content.strip())
+
+
+def _fix_mojibake(text: str) -> str:
+    """
+    The model occasionally emits UTF-8 punctuation (em dashes, curly
+    quotes) that has been mis-decoded as cp1252 somewhere in the
+    provider's own pipeline — each byte of the intended character comes
+    back as its own separate character (an em dash, UTF-8 bytes
+    E2 80 94, becomes "â€”" instead of "—"). Round-tripping through
+    cp1252 -> utf-8 repairs that specific corruption. cp1252 (not plain
+    Latin-1) is what actually reproduces it: the corrupted characters
+    (€, curly quotes, the em dash itself) only exist in cp1252's
+    0x80-0x9F range, which Latin-1 leaves as unprintable control codes.
+    This is a no-op for already-correct text: encoding a single
+    accented character back to a lone byte is never valid standalone
+    UTF-8, so the decode simply fails and the original text is kept.
+    """
+
+    try:
+        repaired = text.encode("cp1252").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+
+    return repaired
 
 
 # ============================================================
@@ -4232,6 +4256,12 @@ Return ONLY JSON:
 or unusual for this rule. "missing_topics" lists narrative topics the
 rule expects that the value hasn't covered yet — only when the value
 is otherwise valid.
+
+When the rule restricts the value to a fixed list of allowed values
+(an enum), match case-insensitively and ignore surrounding whitespace
+unless the rule explicitly says case must match exactly — "success"
+satisfies an allowed value of "SUCCESS". Judge the same submitted
+value the same way every time.
 """
 
 
@@ -4727,6 +4757,62 @@ def run_rule_workflow(
 # RULE FOLLOW-UP
 # ============================================================
 
+CONNECTION_ERROR_RULES = """
+⚠️ CRITICAL RULES FOR CONNECTION TESTING (STEP 2):
+
+1. If the user reports "Connection failed" or "Failed" without details:
+   → You MUST ask for the specific error message.
+   → Do NOT treat this as a WARNING.
+   → Do NOT mention response time unless the user reports success.
+
+2. If the user reports SUCCESS:
+   → Then check response time.
+   → If response time > 3000ms → WARNING
+   → If response time is normal → PASS
+
+3. If the user reports FAILURE with an error message:
+   → Match the error to the appropriate category:
+      - "Login failed for user" → Credentials issue
+      - "Server not found" → Network issue
+      - "Database does not exist" → Wrong database name
+      - "Timeout expired" → Network issue
+      - Any other → Ask for clarification
+
+4. NEVER assume "failed" means "slow".
+   FAIL means the connection did not succeed.
+   WARNING means the connection succeeded but with issues.
+
+5. Always respond to FAIL with:
+   → The specific error
+   → A suggested fix
+   → A request for the user to try again
+"""
+
+# Keywords that mark a rule as the "test the database/server connection"
+# step of a walkthrough, so CONNECTION_ERROR_RULES only applies there and
+# not to unrelated steps that happen to fall at the same position.
+_CONNECTION_TEST_KEYWORDS = (
+    "connection test",
+    "test the connection",
+    "test connection",
+    "connectivity test",
+    "database connection",
+    "server connection",
+)
+
+
+def _is_connection_test_rule(rule: Optional[dict]) -> bool:
+    if not rule:
+        return False
+
+    haystack = " ".join(
+        str(rule.get(field, ""))
+        for field in ("name", "rule_name", "description")
+    ).lower()
+
+    return any(keyword in haystack for keyword in _CONNECTION_TEST_KEYWORDS)
+
+
 def run_rule_followup(
     rule: dict,
     user_message: str,
@@ -4797,6 +4883,7 @@ COMPLETE RULE:
 {complete_rule}
 
 {previous_context}
+""" + FRIENDLY_TONE_GUIDELINES + """
 
 IMPORTANT:
 
@@ -4809,7 +4896,7 @@ IMPORTANT:
 7. If giving an example, use one concrete example.
 8. Never decide validation yourself.
 9. Python deterministic validation is authoritative.
-"""
+""" + (CONNECTION_ERROR_RULES if _is_connection_test_rule(rule) else "")
 
     conversation_parts = []
 
@@ -4850,6 +4937,54 @@ IMPORTANT:
         ),
         temperature=0.2,
         max_tokens=700,
+    )
+
+
+# ============================================================
+# CHITCHAT REPLY (STEP-BY-STEP WALKTHROUGH)
+# ============================================================
+
+def get_chitchat_reply(
+    user_message: str,
+    step_label: str = "",
+) -> str:
+    """
+    A short, warm reply to a greeting or small-talk message sent while a
+    user is mid-way through a step-by-step walkthrough (see
+    guided_engine.take_turn, intent == input_intent.CHITCHAT).
+
+    Unlike run_rule_followup, this is not a question about the current
+    rule — the user just said something conversational. The reply must
+    stay brief and steer back to the walkthrough, since the step's own
+    reminder (name, example) is appended separately by step_presenter.
+    """
+
+    system_prompt = FRIENDLY_TONE_GUIDELINES + """
+
+You are the BRAINOPX Step Assistant, mid-way through guiding a user
+through one step of a configuration walkthrough. The user just sent
+something conversational — a greeting, thanks, or small talk — rather
+than an attempt at the step's value.
+
+Reply in ONE short, warm sentence in that same conversational spirit,
+then briefly invite them back to the step. Do not restate the step's
+rules, format, or example — those are shown separately right after your
+reply. Do not answer unrelated questions here; if the message is really
+a question about something else, just acknowledge it briefly and steer
+back to the walkthrough.
+"""
+
+    user_prompt = (
+        f"CURRENT STEP: {step_label or 'this step'}\n\n"
+        f"USER: {user_message}"
+    )
+
+    return _call_groq(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        temperature=0.5,
+        max_tokens=120,
+        reasoning_effort="low",
     )
 
 
@@ -6128,7 +6263,7 @@ Python deterministic validation is authoritative.
 Be concise and actionable.
 
 Ask one question at a time.
-"""
+""" + FRIENDLY_TONE_GUIDELINES + RESPONSE_FORMATTING_GUIDELINES
 
     return _call_groq(
         system_prompt=system_prompt + _language_suffix(language),
@@ -6141,6 +6276,96 @@ Ask one question at a time.
 # ============================================================
 # SIDEBAR AI ASSISTANT (general chatbot)
 # ============================================================
+
+# A human handoff link, shown verbatim by the model rather than invented —
+# only the URL is configurable; the model never generates this one itself.
+# Falls back to the app's own outgoing address (SMTP_FROM_EMAIL) so an
+# operator gets a working handoff with zero extra setup.
+EXPERT_CONTACT_URL = os.getenv("EXPERT_CONTACT_URL") or (
+    f"mailto:{os.getenv('SMTP_FROM_EMAIL')}" if os.getenv("SMTP_FROM_EMAIL") else ""
+)
+EXPERT_CONTACT_LABEL = os.getenv("EXPERT_CONTACT_LABEL", "Contact a BRAINOPX expert")
+EXPERT_CONTACT_MARKDOWN = (
+    f"[{EXPERT_CONTACT_LABEL}]({EXPERT_CONTACT_URL})" if EXPERT_CONTACT_URL else ""
+)
+
+_ESCALATION_SECTION = (
+    f"""
+
+Escalating to a human expert:
+- If the user explicitly asks to talk to a person, a human, or an expert,
+  or asks something you cannot actually resolve from what is supplied to
+  you here (a bug, their account, billing, data recovery, or anything
+  needing action you cannot take), say so in one brief sentence, then put
+  this on its own line, exactly as written, changing nothing about it:
+  {EXPERT_CONTACT_MARKDOWN}
+- Only do this when you genuinely cannot help — never for something you
+  can already answer from the context given to you above."""
+    if EXPERT_CONTACT_MARKDOWN
+    else ""
+)
+
+# ============================================================
+# FRIENDLY TONE GUIDELINES
+#
+# Distilled from app/knowledge/conversation_style_examples.md — shared by
+# every assistant surface that can hold a normal conversation with the
+# user, so greetings, small talk, and everyday questions get a consistent,
+# warm reply instead of each surface inventing its own tone.
+# ============================================================
+
+FRIENDLY_TONE_GUIDELINES = """
+Tone and conversational style:
+- Be warm, natural, and concise — a sentence or two, not a wall of text.
+- Mirror greetings and small talk briefly and naturally (a short "Hey!
+  ... how about you?"), then offer a next step.
+- Admit when you don't know something or don't have access to it, instead
+  of guessing or inventing an answer.
+- When a request is vague, ask one clarifying question before diving in.
+- Prefer plain language over jargon.
+- When you have to decline something, offer the nearest thing you can
+  actually help with instead of a flat refusal.
+- Never use emojis or other pictographic symbols anywhere in your reply.
+"""
+
+
+# ============================================================
+# RESPONSE STRUCTURE — shared by every surface that can produce a
+# longer, multi-part reply (a summary, a list of open issues, a
+# walkthrough), so a real answer reads as organized sections instead of
+# one dense paragraph.
+# ============================================================
+
+RESPONSE_FORMATTING_GUIDELINES = """
+Formatting:
+- Never use emojis or emoji-style symbols anywhere in your reply.
+- When producing a structured summary or report, organize it with
+  '#'/'##' markdown-style headings and bulleted ('- ') or numbered
+  ('1. ') lists rather than one long paragraph, so it renders clearly
+  and can be exported to PDF/Word cleanly.
+- When the information is naturally tabular (rows of comparable items,
+  a list of columns/rules/values, counts or statuses broken down by
+  category, a side-by-side comparison, etc.) or when the user explicitly
+  asks for a table, present it as a markdown pipe table: a header row,
+  a '|---|---|' separator row, then one data row per line, e.g.
+  "| Column | Type |\n|---|---|\n| id | integer |". Do not describe
+  tabular data as prose when a table would show it more clearly.
+- When the user asks for a step-by-step guide, a walkthrough, a
+  procedure, or "how do I ..." instructions, format every step as one
+  line in a numbered list: a short **Bold Title** (two to four words),
+  then " — ", then one concise sentence explaining that step. Example:
+  "1. **Keyword Research** — Finding the right keywords helps target
+  your audience and improve search rankings." Keep every step in the
+  list to exactly that shape (bold title, em dash, one sentence) with
+  no sub-bullets underneath — the interface renders this exact pattern
+  as illustrated step cards, and a step missing the bold title or the
+  dash falls back to a plain numbered line instead.
+- Lead with the direct answer or the single most important fact, then
+  break out supporting detail (what's wrong, why, what to do next) into
+  its own clearly labeled section rather than folding everything into
+  one paragraph.
+"""
+
 
 ASSISTANT_SYSTEM_PROMPT = """
 You are the BRAINOPX Assistant, a chatbot embedded in the BRAINOPX
@@ -6165,29 +6390,13 @@ What you can do:
 - When one or more documents are attached below (under ATTACHED DOCUMENTS),
   you may read, summarize, analyze, compare, or answer questions about
   their content. Only use what the document text actually says.
-
-Formatting:
-- When producing a structured summary or report, organize it with
-  '#'/'##' markdown-style headings and bulleted ('- ') or numbered
-  ('1. ') lists rather than one long paragraph, so it renders clearly
-  and can be exported to PDF/Word cleanly.
-- When the information is naturally tabular (rows of comparable items,
-  a list of columns/rules/values, counts or statuses broken down by
-  category, a side-by-side comparison, etc.) or when the user explicitly
-  asks for a table, present it as a markdown pipe table: a header row,
-  a '|---|---|' separator row, then one data row per line, e.g.
-  "| Column | Type |\n|---|---|\n| id | integer |". Do not describe
-  tabular data as prose when a table would show it more clearly.
-- When the user asks for a step-by-step guide, a walkthrough, a
-  procedure, or "how do I ..." instructions, format every step as one
-  line in a numbered list: a short **Bold Title** (two to four words),
-  then " — ", then one concise sentence explaining that step. Example:
-  "1. **Keyword Research** — Finding the right keywords helps target
-  your audience and improve search rankings." Keep every step in the
-  list to exactly that shape (bold title, em dash, one sentence) with
-  no sub-bullets underneath — the interface renders this exact pattern
-  as illustrated step cards, and a step missing the bold title or the
-  dash falls back to a plain numbered line instead.
+- When the user asks where to get, download, or learn more about a
+  specific named tool, driver, or piece of software relevant to their
+  question, you may include one markdown link: `[Label](https://...)`.
+  Only do this when you are confident it is that thing's real, official
+  site — never invent or guess a URL for something you are not sure
+  exists, and never link to an unofficial-looking or unrelated domain.
+  When unsure, say so instead of guessing a link.
 
 Rules:
 - Use ONLY the information supplied to you in this conversation. Never
@@ -6198,6 +6407,7 @@ Rules:
 - Do not generate SQL and do not decide whether a user's data is valid —
   deterministic validation elsewhere in BRAINOPX is authoritative for that.
 - Be concise, clear, and helpful.
+""" + FRIENDLY_TONE_GUIDELINES + RESPONSE_FORMATTING_GUIDELINES + """
 
 Staying on topic:
 - Greetings, small talk, and pleasantries (hello, hi, good morning/
@@ -6214,7 +6424,7 @@ Staying on topic:
   about something else related to BRAINOPX?"
 - Always steer the conversation back toward BRAINOPX: tasks, configuration
   requests, rules, or the supplied task/document context.
-"""
+""" + _ESCALATION_SECTION
 
 
 def get_assistant_chat_response(

@@ -386,16 +386,55 @@ const useTypewriterReveal = (content, enabled, isHtml) => {
 // markup the model happened to produce) — bold spans, and proper <ol>/<ul>
 // lists so numbered and bulleted points actually read as points.
 
+// Only these schemes are ever turned into a clickable link — anything
+// else (javascript:, data:, etc.) renders as plain text instead, so a
+// model reply can never smuggle an executable href into the page.
+const isSafeHref = (href) => /^(https?:|mailto:)/i.test(href)
+
+const AssistantLink = ({ href, children, keyPrefix }) => {
+  if (!isSafeHref(href)) return <React.Fragment key={keyPrefix}>{children}</React.Fragment>
+  return (
+    <a
+      key={keyPrefix}
+      href={href}
+      target={href.startsWith('mailto:') ? undefined : '_blank'}
+      rel="noopener noreferrer"
+      style={{ color: '#4f46e5', fontWeight: 600, textDecoration: 'underline', wordBreak: 'break-word' }}
+    >
+      {children}
+    </a>
+  )
+}
+
 const renderInline = (line, keyPrefix) => {
-  const segments = line.split(/(\*\*[^*]+\*\*)/g).filter(Boolean)
+  const segments = line
+    .split(/(\*\*[^*]+\*\*|\[[^\]]+\]\([^\s)]+\)|https?:\/\/[^\s)]+)/g)
+    .filter(Boolean)
 
   return segments.map((segment, i) => {
+    const key = `${keyPrefix}-${i}`
+
     const boldMatch = segment.match(/^\*\*([^*]+)\*\*$/)
-    return boldMatch ? (
-      <strong key={`${keyPrefix}-${i}`}>{boldMatch[1]}</strong>
-    ) : (
-      <React.Fragment key={`${keyPrefix}-${i}`}>{segment}</React.Fragment>
-    )
+    if (boldMatch) return <strong key={key}>{boldMatch[1]}</strong>
+
+    const linkMatch = segment.match(/^\[([^\]]+)\]\(([^\s)]+)\)$/)
+    if (linkMatch) {
+      return (
+        <AssistantLink key={key} keyPrefix={key} href={linkMatch[2]}>
+          {linkMatch[1]}
+        </AssistantLink>
+      )
+    }
+
+    if (/^https?:\/\/[^\s)]+$/.test(segment)) {
+      return (
+        <AssistantLink key={key} keyPrefix={key} href={segment}>
+          {segment}
+        </AssistantLink>
+      )
+    }
+
+    return <React.Fragment key={key}>{segment}</React.Fragment>
   })
 }
 

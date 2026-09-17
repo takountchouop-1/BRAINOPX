@@ -138,6 +138,11 @@ const AiAssistant = () => {
 
   const scrollAnchorRef = useRef(null)
   const attachFileInputRef = useRef(null)
+  // Whether the message list was scrolled to (or near) the bottom before
+  // this update — read in the effect below to decide whether a new
+  // message should pull the view down, or leave the user's scroll
+  // position alone while they're reading earlier messages.
+  const isAtBottomRef = useRef(true)
 
   const panel = (theme) =>
     theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : '#ffffff'
@@ -162,8 +167,21 @@ const AiAssistant = () => {
   }, [])
 
   useEffect(() => {
-    scrollAnchorRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const lastMessage = messages[messages.length - 1]
+    // Always follow the user's own message; for an incoming assistant
+    // reply, only auto-scroll if they hadn't scrolled up to read history.
+    if (isAtBottomRef.current || lastMessage?.role === 'user') {
+      scrollAnchorRef.current?.scrollIntoView({ behavior: 'smooth' })
+      isAtBottomRef.current = true
+    }
   }, [messages, sending])
+
+  const NEAR_BOTTOM_THRESHOLD_PX = 80
+  const handleMessagesScroll = (e) => {
+    const el = e.currentTarget
+    isAtBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_THRESHOLD_PX
+  }
 
   useEffect(() => () => clearTimeout(contextCloseTimerRef.current), [])
 
@@ -950,6 +968,7 @@ const AiAssistant = () => {
         // ── Active conversation ───────────────────────────────────── */}
         <>
           <Box
+            onScroll={handleMessagesScroll}
             sx={{
               flex: 1,
               minHeight: 0,

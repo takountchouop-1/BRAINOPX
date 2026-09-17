@@ -142,7 +142,7 @@ const Register = () => {
       component="main"
       sx={{
         minHeight: '100vh',
-        background: 'linear-gradient(180deg, #050915 0%, #0a1230 45%, #060a1c 100%)',
+        background: '#ffffff',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -163,8 +163,8 @@ const Register = () => {
           left: { xs: 12, md: 24 },
           textTransform: 'none',
           fontWeight: 600,
-          color: '#e2e8f0',
-          '&:hover': { backgroundColor: 'rgba(255,255,255,0.08)' },
+          color: '#1e293b',
+          '&:hover': { backgroundColor: 'rgba(15,23,42,0.06)' },
         }}
       >
         {t('register.backToHome')}

@@ -81,6 +81,19 @@ const THINKING_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes (within the 3-6 min windo
 const NETWORK_ERROR_MESSAGE = 'Network problem, check your network and try back.'
 const LOAD_ERROR_MESSAGE = 'An error occurred while trying to load the info.'
 
+// Human labels for the anomaly kinds report_analysis_service.py detects,
+// used by the resolution cards rendered in the chat panel.
+const ANOMALY_KIND_LABELS = {
+  missing_value: 'Missing value',
+  invalid_format: 'Invalid format',
+  duplicate: 'Duplicate value',
+  negative_value: 'Negative value',
+  unknown_code: 'Unknown reference',
+  inconsistent_value: 'Inconsistent value',
+  incomplete_relationship: 'Incomplete relationship',
+  duplicate_row: 'Duplicate row',
+}
+
 // Wraps fetch with a timeout so a stalled connection doesn't hang forever,
 // and tags network-ish failures (timeout / connectivity) so callers can
 // show a network-specific message instead of a generic one.
@@ -143,12 +156,26 @@ const ConfigurationIngest = ({ searchTerm = '', setSearchTerm = () => {} }) => {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadError, setUploadError] = useState(null)
   const [isUploading, setIsUploading] = useState(false)
+  // Where the uploaded file itself lives on the server — lets the user
+  // open/download it, fix a flagged cell directly in Excel, and send
+  // the corrected file back via resubmitCorrectedFile below.
+  const [fileUrl, setFileUrl] = useState(null)
+  const [isResubmittingFile, setIsResubmittingFile] = useState(false)
+  const resubmitFileInputRef = useRef(null)
 
   // Validation Errors from Backend Rules Engine
   const [validationErrors, setValidationErrors] = useState([])
 
   // Add this with your other state declarations
 const [matchInfo, setMatchInfo] = useState(null)
+
+  // Manual template selection — shown when the backend's auto-match
+  // (column-header similarity, see template_matcher.py) can't confidently
+  // pick a task template for the uploaded file.
+  const [showTemplateSelection, setShowTemplateSelection] = useState(false)
+  const [availableTemplates, setAvailableTemplates] = useState([])
+  const [pendingUploadFile, setPendingUploadFile] = useState(null)
+  const [isUploadingWithTemplate, setIsUploadingWithTemplate] = useState(false)
 
   // Stats state
   const [stats, setStats] = useState({ total: 0, solved: 0, remaining: 0, progress: 0 })
@@ -158,11 +185,27 @@ const [matchInfo, setMatchInfo] = useState(null)
   const [isGeneratingScript, setIsGeneratingScript] = useState(false)
   const [scriptGenError, setScriptGenError] = useState(null)
 
-  // Report-analysis anomalies: unknown codes needing a reference file,
-  // and conflicts needing an update/ignore decision.
+  // Report-analysis anomalies: every kind of issue found in the
+  // upload (missing/invalid/duplicate/unknown reference/inconsistent/
+  // incomplete relationship), each resolved by a correction, a
+  // reference file, or (conflicts/incomplete relationships) a
+  // decision.
   const [anomalies, setAnomalies] = useState([])
   const [isSubmittingReferenceFile, setIsSubmittingReferenceFile] = useState(false)
   const [isSubmittingDecision, setIsSubmittingDecision] = useState(false)
+  const [correctionDrafts, setCorrectionDrafts] = useState({}) // { [anomalyId]: text }
+  const [submittingCorrectionId, setSubmittingCorrectionId] = useState(null)
+  // Whether the user wants to fix flagged anomalies by typing corrected
+  // values here in chat, or by reopening the Excel file and resubmitting
+  // it — asked once via the card rendered when needsCorrectionModeChoice
+  // is true, then remembered for the rest of the request.
+  const [correctionMode, setCorrectionMode] = useState(null)
+  const [needsCorrectionModeChoice, setNeedsCorrectionModeChoice] = useState(false)
+  const [isSubmittingCorrectionMode, setIsSubmittingCorrectionMode] = useState(false)
+  // Which open anomaly the next attached file resolves — set by the
+  // "Attach production extract" button on that anomaly's card, so
+  // submitReferenceFile targets the right one instead of guessing.
+  const [referenceFileAnomalyId, setReferenceFileAnomalyId] = useState(null)
 
   // Conversational Chat State
   const [chatMessages, setChatMessages] = useState([])
@@ -195,6 +238,10 @@ const [pendingFile, setPendingFile] = useState(null)
   const pollRef = useRef(null)
   const isChatLoadingRef = useRef(false)
   const chatEndRef = useRef(null)
+  // Whether the chat panel was scrolled to (or near) the bottom before
+  // this update — read below to decide whether a new message should
+  // pull the view down, or leave the user's scroll position alone.
+  const isChatAtBottomRef = useRef(true)
   const fileInputRef = useRef(null)
   const composerInputRef = useRef(null)
   const chatFileInputRef = useRef(null)
@@ -282,8 +329,21 @@ const fetchWelcome = async () => {
   }, [selectedTaskId])
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const lastMessage = chatMessages[chatMessages.length - 1]
+    // Always follow the user's own message; for an incoming AI reply,
+    // only auto-scroll if they hadn't scrolled up to read history.
+    if (isChatAtBottomRef.current || lastMessage?.sender === 'user') {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+      isChatAtBottomRef.current = true
+    }
   }, [chatMessages])
+
+  const CHAT_NEAR_BOTTOM_THRESHOLD_PX = 80
+  const handleChatScroll = (e) => {
+    const el = e.currentTarget
+    isChatAtBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < CHAT_NEAR_BOTTOM_THRESHOLD_PX
+  }
 
   // Keeps the composer's attachment routing correct across a page
   // reload or the background poll, not just right after a chat reply.
@@ -325,6 +385,47 @@ const fetchWelcome = async () => {
     }
   }
 
+  // Shared by the auto-match upload and the manual-template upload: both
+  // land the file on a configuration request and seed the same chat/stats/
+  // step-workflow state once the backend has picked (or been told) a task.
+  const applyUploadResponse = (data, file) => {
+    setRequestId(data.id)
+    setRequestStatus(data.status)
+    setValidationErrors(data.validation_errors || [])
+    setChatMessages(data.conversation || [])
+    setUploadedFile(file)
+    setFileUrl(data.file_url || null)
+
+    if (data.match_summary) {
+      setMatchInfo({
+        taskName: data.task_name,
+        matchScore: data.match_score,
+        matchedColumns: data.match_summary.matched_columns,
+        missingColumns: data.match_summary.missing_columns,
+      })
+    }
+
+    // If the task has rules, the AI has already run per-rule workflows and
+    // seeded the conversation with an instant rule-aware response. Display
+    // the per-rule verdicts in the validation report area.
+    if (data.rule_results && data.rule_results.length > 0) {
+      // The pre-seeded conversation is already in data.conversation
+      setStats({
+        total: data.rule_results.length,
+        solved: data.rule_results.filter(r => r.status === 'passed').length,
+        remaining: data.rule_results.filter(r => r.status !== 'passed').length,
+        progress: Math.round(
+          (data.rule_results.filter(r => r.status === 'passed').length / data.rule_results.length) * 100
+        ),
+      })
+    }
+
+    // Store step-by-step workflow progress
+    if (data.step_progress) {
+      setStepProgress(data.step_progress)
+    }
+  }
+
 const uploadFile = async (file) => {
   setIsUploading(true)
   setUploadError(null)
@@ -347,63 +448,66 @@ const uploadFile = async (file) => {
 
     const data = await resp.json()
 
-    // Check if auto-match succeeded
+    // Auto-match couldn't confidently pick a template — let the user
+    // choose from the active ones instead of guessing.
     if (data.requires_manual_selection) {
-      // Show template selection dialog
-      setAvailableTemplates(data.available_templates)
+      setAvailableTemplates(data.available_templates || [])
+      setPendingUploadFile(file)
       setShowTemplateSelection(true)
-      setPendingUploadData({
-        file: file,
-        filePath: data.uploaded_file_path,
-        matchScore: data.match_score
-      })
-      setIsUploading(false)
       return
     }
 
-// Auto-match succeeded
-    setRequestId(data.id)
-    setRequestStatus(data.status)
-    setValidationErrors(data.validation_errors || [])
-    setChatMessages(data.conversation || [])
-    setUploadedFile(file)
-    
-    // Show match info
-    if (data.match_summary) {
-      setMatchInfo({
-        taskName: data.task_name,
-        matchScore: data.match_score,
-        matchedColumns: data.match_summary.matched_columns,
-        missingColumns: data.match_summary.missing_columns,
-      })
-    }
-    
-    // If the task has rules, the AI has already run per-rule workflows and
-    // seeded the conversation with an instant rule-aware response. Display
-    // the per-rule verdicts in the validation report area.
-    if (data.rule_results && data.rule_results.length > 0) {
-      // The pre-seeded conversation is already in data.conversation
-      setStats({
-        total: data.rule_results.length,
-        solved: data.rule_results.filter(r => r.status === 'passed').length,
-        remaining: data.rule_results.filter(r => r.status !== 'passed').length,
-        progress: Math.round(
-          (data.rule_results.filter(r => r.status === 'passed').length / data.rule_results.length) * 100
-        ),
-      })
-    }
-    
-    // Store step-by-step workflow progress
-    if (data.step_progress) {
-      setStepProgress(data.step_progress)
-    }
-
+    applyUploadResponse(data, file)
   } catch (err) {
     setUploadError(err.message)
   } finally {
     setIsUploading(false)
   }
 }
+
+  // User picked a template by hand from the manual-selection dialog
+  // (auto-match came back inconclusive). Re-sends the same file, this
+  // time pinned to a task_id so the backend skips matching entirely.
+  const uploadWithTemplate = async (taskId) => {
+    if (!pendingUploadFile) return
+    setIsUploadingWithTemplate(true)
+    setUploadError(null)
+
+    const formData = new FormData()
+    formData.append('file', pendingUploadFile)
+    formData.append('task_id', taskId)
+
+    try {
+      const token = localStorage.getItem('brainopx_token')
+      const resp = await fetch(`${API_BASE}/api/requests/upload-with-template`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      })
+
+      if (!resp.ok) {
+        const payload = await resp.json().catch(() => null)
+        throw new Error(payload?.detail || 'File upload failed.')
+      }
+
+      const data = await resp.json()
+      applyUploadResponse(data, pendingUploadFile)
+      setShowTemplateSelection(false)
+      setAvailableTemplates([])
+      setPendingUploadFile(null)
+    } catch (err) {
+      setUploadError(err.message)
+    } finally {
+      setIsUploadingWithTemplate(false)
+    }
+  }
+
+  const cancelTemplateSelection = () => {
+    if (isUploadingWithTemplate) return
+    setShowTemplateSelection(false)
+    setAvailableTemplates([])
+    setPendingUploadFile(null)
+  }
 
   const fetchRequestState = useCallback(async (id) => {
     // A chat send is in flight: its own response handler will apply the
@@ -424,6 +528,9 @@ const uploadFile = async (file) => {
         setChatMessages(data.conversation || [])
         if (data.generated_script) setGeneratedScript(data.generated_script)
         setAnomalies(data.anomalies || [])
+        setCorrectionMode(data.correction_mode || null)
+        setNeedsCorrectionModeChoice(Boolean(data.needs_correction_mode_choice))
+        if (data.file_url) setFileUrl(data.file_url)
         // Update stats
         updateStats(data.validation_errors || [])
       }
@@ -448,9 +555,15 @@ const uploadFile = async (file) => {
   const submitReferenceFile = async () => {
     if (!pendingFile || !requestId) return
 
-    const targetAnomaly = anomalies.find((a) => a.status === 'open' && a.kind === 'unknown_code')
+    // Prefer the anomaly the "Attach production extract" button was
+    // clicked on; fall back to the first open anomaly of any kind so
+    // the composer's paperclip still does something sensible.
+    const targetAnomaly = referenceFileAnomalyId
+      ? anomalies.find((a) => a.id === referenceFileAnomalyId)
+      : anomalies.find((a) => a.status === 'open')
     if (!targetAnomaly) {
       setPendingFile(null)
+      setReferenceFileAnomalyId(null)
       return
     }
 
@@ -486,6 +599,7 @@ const uploadFile = async (file) => {
       ])
     } finally {
       setPendingFile(null)
+      setReferenceFileAnomalyId(null)
       setIsSubmittingReferenceFile(false)
       isChatLoadingRef.current = false
     }
@@ -534,6 +648,49 @@ const uploadFile = async (file) => {
     }
   }
 
+  // Records whether the user wants to fix flagged anomalies here in
+  // chat or by reopening the Excel file and resubmitting it — posted
+  // from the choice card rendered above the anomaly list the first
+  // time an open anomaly appears.
+  const submitCorrectionMode = async (mode) => {
+    if (!requestId) return
+    setIsSubmittingCorrectionMode(true)
+    isChatLoadingRef.current = true
+
+    try {
+      const token = localStorage.getItem('brainopx_token')
+      const resp = await fetchWithThinkingTimeout(`${API_BASE}/api/requests/${requestId}/correction-mode`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ mode }),
+      })
+
+      if (resp.ok) {
+        const data = await resp.json()
+        setChatMessages(data.conversation || [])
+        setCorrectionMode(data.correction_mode || null)
+        setNeedsCorrectionModeChoice(false)
+        fetchRequestState(requestId)
+      } else {
+        const errorData = await resp.json().catch(() => null)
+        throw new Error(errorData?.detail || 'Could not record that choice.')
+      }
+    } catch (err) {
+      console.error('Correction mode submission failed:', err)
+      const message = err.isNetworkError ? NETWORK_ERROR_MESSAGE : LOAD_ERROR_MESSAGE
+      setChatMessages((prev) => [
+        ...prev,
+        { sender: 'ai', text: message, timestamp: new Date().toISOString(), _animate: true },
+      ])
+    } finally {
+      setIsSubmittingCorrectionMode(false)
+      isChatLoadingRef.current = false
+    }
+  }
+
   // Records an update/ignore decision for a conflict anomaly, posted
   // from the decision buttons rendered in the chat.
   const submitDecision = async (anomalyId, decision) => {
@@ -573,16 +730,117 @@ const uploadFile = async (file) => {
     }
   }
 
+  // Submits a corrected value for a flagged row/column, posted from
+  // the correction field rendered on that anomaly's card.
+  const submitCorrection = async (anomalyId) => {
+    const correctedValue = (correctionDrafts[anomalyId] || '').trim()
+    if (!requestId || !correctedValue) return
+
+    setSubmittingCorrectionId(anomalyId)
+    isChatLoadingRef.current = true
+
+    try {
+      const token = localStorage.getItem('brainopx_token')
+      const resp = await fetchWithThinkingTimeout(`${API_BASE}/api/requests/${requestId}/correction`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ anomaly_id: anomalyId, corrected_value: correctedValue }),
+      })
+
+      if (resp.ok) {
+        const data = await resp.json()
+        setChatMessages(data.conversation || [])
+        if (data.accepted) {
+          setCorrectionDrafts((prev) => {
+            const next = { ...prev }
+            delete next[anomalyId]
+            return next
+          })
+        }
+        fetchRequestState(requestId)
+      } else {
+        const errorData = await resp.json().catch(() => null)
+        throw new Error(errorData?.detail || 'Could not submit that correction.')
+      }
+    } catch (err) {
+      console.error('Correction submission failed:', err)
+      const message = err.isNetworkError ? NETWORK_ERROR_MESSAGE : LOAD_ERROR_MESSAGE
+      setChatMessages((prev) => [
+        ...prev,
+        { sender: 'ai', text: message, timestamp: new Date().toISOString(), _animate: true },
+      ])
+    } finally {
+      setSubmittingCorrectionId(null)
+      isChatLoadingRef.current = false
+    }
+  }
+
+  // "Open the file, fix it in Excel, send it back" — the corrected
+  // file replaces the one on this same request, and gets re-validated
+  // from scratch.
+  const resubmitCorrectedFile = async (file) => {
+    if (!file || !requestId) return
+
+    setIsResubmittingFile(true)
+    isChatLoadingRef.current = true
+
+    const formData = new FormData()
+    formData.append('file', file)
+
+    try {
+      const token = localStorage.getItem('brainopx_token')
+      const resp = await fetchWithThinkingTimeout(`${API_BASE}/api/requests/${requestId}/resubmit-file`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      })
+
+      if (resp.ok) {
+        const data = await resp.json()
+        setChatMessages(data.conversation || [])
+        setValidationErrors(data.validation_errors || [])
+        updateStats(data.validation_errors || [])
+        setRequestStatus(data.status)
+        if (data.file_url) setFileUrl(data.file_url)
+        fetchRequestState(requestId)
+      } else {
+        const errorData = await resp.json().catch(() => null)
+        throw new Error(errorData?.detail || 'Could not process the corrected file.')
+      }
+    } catch (err) {
+      console.error('Resubmit failed:', err)
+      const message = err.isNetworkError ? NETWORK_ERROR_MESSAGE : LOAD_ERROR_MESSAGE
+      setChatMessages((prev) => [
+        ...prev,
+        { sender: 'ai', text: message, timestamp: new Date().toISOString(), _animate: true },
+      ])
+    } finally {
+      setIsResubmittingFile(false)
+      isChatLoadingRef.current = false
+    }
+  }
+
 const sendChatMessage = async (e) => {
     e.preventDefault()
     if (!chatInput.trim() && !pendingFile) return
 
-    // A reference file or a step attachment each take their own
-    // dedicated path — neither is a chat turn the existing step-chat/
-    // generic-chat endpoints understand. The AI's own attachment
-    // request takes priority: it's what the user is being asked for.
+    // A main-file upload, a reference file, and a step attachment each
+    // take their own dedicated path — none of them is a chat turn the
+    // existing step-chat/generic-chat endpoints understand.
     if (pendingFile) {
-      if (awaitingAttachment) {
+      if (canAttachMainFile) {
+        // No request yet — this attachment is the file to be analyzed,
+        // sent straight from the conversation instead of the upload
+        // dropzone in the left panel.
+        const fileToAnalyze = pendingFile
+        setPendingFile(null)
+        await uploadFile(fileToAnalyze)
+      } else if (awaitingAttachment) {
+        // The AI's own attachment request takes priority: it's what
+        // the user is being asked for.
         await submitStepAttachment()
       } else {
         await submitReferenceFile()
@@ -882,7 +1140,10 @@ const sendChatMessage = async (e) => {
     setPendingFile(null)
     setSelectedTaskId('')
     setStats({ total: 0, solved: 0, remaining: 0, progress: 0 })
-    setMatchInfo(null) 
+    setMatchInfo(null)
+    setShowTemplateSelection(false)
+    setAvailableTemplates([])
+    setPendingUploadFile(null)
   }
 
   // ─── DRAG & DROP HANDLERS ─────────────────────────────────────────────────────
@@ -920,6 +1181,12 @@ const sendChatMessage = async (e) => {
     lastChatMessage?.sender === 'ai' &&
     lastChatMessage?.passed === false &&
     secondLastChatMessage?.sender === 'user'
+
+  // No request has been created yet — a file attached from the
+  // composer at this point is the main configuration file to analyze
+  // (the same thing the upload dropzone does), not a reference/step
+  // attachment for an already-running conversation.
+  const canAttachMainFile = !requestId
 
   // ─── RENDER ───────────────────────────────────────────────────────────────────
 
@@ -1267,7 +1534,7 @@ const sendChatMessage = async (e) => {
                   maxWidth: '100%',
                   overflow: 'hidden',
                 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1, flexWrap: 'wrap', gap: 1 }}>
                     <Typography variant="h6" sx={{ fontWeight: 700, fontFamily: "'Outfit', sans-serif", display: 'flex', alignItems: 'center', gap: 1 }}>
                       {openErrors.length > 0 ? <WarningAmberIcon color="warning" /> : <CheckCircleIcon color="success" />}
                       Validation Report
@@ -1276,6 +1543,39 @@ const sendChatMessage = async (e) => {
                       {resolvedErrors.length}/{validationErrors.length} resolved
                     </Typography>
                   </Box>
+
+                  {fileUrl && (
+                    <Stack direction="row" spacing={1} sx={{ mb: 1.5 }} flexWrap="wrap" useFlexGap>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<AttachFileIcon fontSize="small" />}
+                        onClick={() => window.open(`${API_BASE}${fileUrl}`, '_blank', 'noopener,noreferrer')}
+                      >
+                        Open Excel file
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={isResubmittingFile ? <CircularProgress size={14} /> : <CloudUploadIcon fontSize="small" />}
+                        disabled={isResubmittingFile}
+                        onClick={() => resubmitFileInputRef.current?.click()}
+                      >
+                        Resubmit corrected file
+                      </Button>
+                      <input
+                        ref={resubmitFileInputRef}
+                        type="file"
+                        accept=".xlsx,.xls,.csv"
+                        style={{ display: 'none' }}
+                        onChange={(e) => {
+                          const picked = e.target.files?.[0]
+                          e.target.value = ''
+                          if (picked) resubmitCorrectedFile(picked)
+                        }}
+                      />
+                    </Stack>
+                  )}
 
                   <Box sx={{ width: '100%', overflowX: 'auto' }}>
                     <TableContainer 
@@ -1322,12 +1622,20 @@ const sendChatMessage = async (e) => {
                                 {err.rule_violated ?? err.rule ?? '—'}
                               </TableCell>
                               <TableCell>
-<Chip
-                                  label={err.status === 'solved' ? 'Solved' : 'Open'}
-                                  color={err.status === 'solved' ? 'success' : 'error'}
-                                  size="small"
-                                  sx={{ fontSize: 9, height: 18, fontWeight: 700 }}
-                                />
+                                <Tooltip title={fileUrl ? 'Open the Excel file to fix this in place' : ''}>
+                                  <Chip
+                                    label={err.status === 'solved' ? 'Solved' : 'Open'}
+                                    color={err.status === 'solved' ? 'success' : 'error'}
+                                    size="small"
+                                    onClick={fileUrl ? () => window.open(`${API_BASE}${fileUrl}`, '_blank', 'noopener,noreferrer') : undefined}
+                                    sx={{
+                                      fontSize: 9,
+                                      height: 18,
+                                      fontWeight: 700,
+                                      cursor: fileUrl ? 'pointer' : 'default',
+                                    }}
+                                  />
+                                </Tooltip>
                               </TableCell>
                             </TableRow>
                           ))}
@@ -1489,7 +1797,9 @@ const sendChatMessage = async (e) => {
               {isChatLoading && <CircularProgress size={14} />}
             </Box>
 
-            <Box sx={{
+            <Box
+              onScroll={handleChatScroll}
+              sx={{
               flex: 1,
               px: 2.5,
               py: 3,
@@ -1541,6 +1851,44 @@ const sendChatMessage = async (e) => {
                 ))
               )}
 
+              {/* Asked once, the first time an open anomaly appears: does
+                  the user want to type corrected values here in chat, or
+                  reopen the Excel file, fix it there, and resubmit it for
+                  another check? Reference-file/update/ignore actions below
+                  aren't gated on this — only the plain correction field is. */}
+              {needsCorrectionModeChoice && (
+                <Paper
+                  variant="outlined"
+                  sx={{ p: 2, borderRadius: 2, borderColor: 'primary.main', bgcolor: 'action.hover' }}
+                >
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
+                    How would you like to fix these?
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1.5 }}>
+                    You can type each corrected value here in the chat, or reopen the Excel
+                    file, fix it there, and resubmit it for another check.
+                  </Typography>
+                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      disabled={isSubmittingCorrectionMode}
+                      onClick={() => submitCorrectionMode('chat')}
+                    >
+                      Correct here in chat
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={isSubmittingCorrectionMode}
+                      onClick={() => submitCorrectionMode('excel')}
+                    >
+                      I'll fix it in Excel
+                    </Button>
+                  </Stack>
+                </Paper>
+              )}
+
               {/* Conflicts found between the upload and a reference file:
                   each needs an explicit update-vs-ignore decision before
                   the request can move on. */}
@@ -1574,6 +1922,117 @@ const sendChatMessage = async (e) => {
                     >
                       Ignore
                     </Button>
+                  </Stack>
+                </Paper>
+              ))}
+
+              {/* Every other open anomaly kind: a correction field (fix
+                  the value yourself), an "attach production extract"
+                  action (generalized reference-file flow), and — for
+                  incomplete relationships, which aren't the user's own
+                  row to fix — an update/ignore decision like conflicts. */}
+              {anomalies.filter((a) => a.status === 'open' && a.kind !== 'conflict').map((a) => (
+                <Paper
+                  key={a.id}
+                  variant="outlined"
+                  sx={{ p: 2, borderRadius: 2, borderColor: 'divider', bgcolor: 'action.hover' }}
+                >
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
+                    {ANOMALY_KIND_LABELS[a.kind] || 'Issue'} — row {a.row}
+                    {a.column ? <> , column "{a.column}"</> : null}
+                    {a.kind === 'duplicate_row' && a.conflict_detail?.duplicate_of_row != null
+                      ? ` (matches row ${a.conflict_detail.duplicate_of_row})`
+                      : null}
+                  </Typography>
+                  {a.code != null && a.code !== '' && (
+                    <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1.5 }}>
+                      Submitted value: "{a.code}"
+                    </Typography>
+                  )}
+
+                  <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                    {a.kind !== 'incomplete_relationship' && a.kind !== 'duplicate_row' && (
+                      correctionMode === 'excel' ? (
+                        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                          Fix this in the Excel file and resubmit it — see the "Open file" button above.
+                        </Typography>
+                      ) : correctionMode === 'chat' ? (
+                        <>
+                          <TextField
+                            size="small"
+                            placeholder="Corrected value"
+                            value={correctionDrafts[a.id] || ''}
+                            onChange={(e) => setCorrectionDrafts((prev) => ({ ...prev, [a.id]: e.target.value }))}
+                            disabled={submittingCorrectionId === a.id}
+                            sx={{ minWidth: 160 }}
+                          />
+                          <Button
+                            size="small"
+                            variant="contained"
+                            disabled={submittingCorrectionId === a.id || !(correctionDrafts[a.id] || '').trim()}
+                            onClick={() => submitCorrection(a.id)}
+                          >
+                            {submittingCorrectionId === a.id ? <CircularProgress size={16} /> : 'Submit correction'}
+                          </Button>
+                        </>
+                      ) : null
+                    )}
+                    {a.kind !== 'duplicate_row' && (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<AttachFileIcon fontSize="small" />}
+                        disabled={isSubmittingReferenceFile}
+                        onClick={() => {
+                          setReferenceFileAnomalyId(a.id)
+                          chatFileInputRef.current?.click()
+                        }}
+                      >
+                        Attach production extract
+                      </Button>
+                    )}
+                    {a.kind === 'incomplete_relationship' && (
+                      <>
+                        <Button
+                          size="small"
+                          variant="contained"
+                          color="warning"
+                          disabled={isSubmittingDecision}
+                          onClick={() => submitDecision(a.id, 'update')}
+                        >
+                          Update existing
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          disabled={isSubmittingDecision}
+                          onClick={() => submitDecision(a.id, 'ignore')}
+                        >
+                          Ignore
+                        </Button>
+                      </>
+                    )}
+                    {a.kind === 'duplicate_row' && (
+                      <>
+                        <Button
+                          size="small"
+                          variant="contained"
+                          color="warning"
+                          disabled={isSubmittingDecision}
+                          onClick={() => submitDecision(a.id, 'update')}
+                        >
+                          Keep row
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          disabled={isSubmittingDecision}
+                          onClick={() => submitDecision(a.id, 'ignore')}
+                        >
+                          Remove row
+                        </Button>
+                      </>
+                    )}
                   </Stack>
                 </Paper>
               ))}
@@ -1646,13 +2105,17 @@ const sendChatMessage = async (e) => {
                 alignItems: 'center',
                 gap: 1
               }}>
-                {(isSubmittingReferenceFile || isSubmittingStepAttachment)
+                {(isSubmittingReferenceFile || isSubmittingStepAttachment || isUploading)
                   ? <CircularProgress size={16} />
                   : <AttachFileIcon fontSize="small" color="primary" />}
                 <Typography variant="caption" sx={{ flex: 1 }}>
-                  {(isSubmittingReferenceFile || isSubmittingStepAttachment) ? `Uploading ${pendingFile.name}…` : pendingFile.name}
+                  {(isSubmittingReferenceFile || isSubmittingStepAttachment || isUploading)
+                    ? `Analyzing ${pendingFile.name}…`
+                    : canAttachMainFile
+                    ? `${pendingFile.name} — ready to analyze`
+                    : pendingFile.name}
                 </Typography>
-                <IconButton size="small" onClick={() => setPendingFile(null)} disabled={isSubmittingReferenceFile || isSubmittingStepAttachment}>
+                <IconButton size="small" onClick={() => setPendingFile(null)} disabled={isSubmittingReferenceFile || isSubmittingStepAttachment || isUploading}>
                   <Typography variant="caption">×</Typography>
                 </IconButton>
               </Box>
@@ -1684,6 +2147,8 @@ const sendChatMessage = async (e) => {
                 accept={
                   awaitingAttachment
                     ? '.xlsx,.xls,.csv,.txt,.pdf,.docx,.doc,.png,.jpg,.jpeg,.webp'
+                    : canAttachMainFile
+                    ? '.xlsx,.xls,.csv'
                     : '.xlsx,.xls,.csv,.txt'
                 }
                 onChange={(e) => setPendingFile(e.target.files?.[0] || null)}
@@ -1719,7 +2184,7 @@ const sendChatMessage = async (e) => {
                   disabled={requestStatus === 'draft' || isCompleted || isChatLoading}
                   placeholder={
                     requestStatus === 'draft'
-                      ? 'Upload a configuration file to start...'
+                      ? 'Attach or upload a configuration file to start...'
                       : isCompleted
                       ? 'Processing complete.'
                       : 'Ask anything...'
@@ -1746,14 +2211,16 @@ const sendChatMessage = async (e) => {
                   <Tooltip title={
                     awaitingAttachment
                       ? 'Attach a file or screenshot to help explain'
+                      : canAttachMainFile
+                      ? 'Attach the Excel file to analyze'
                       : 'Attach complementary file (e.g. production extract)'
                   }>
                     <span>
                       <IconButton
                         size="small"
                         onClick={() => chatFileInputRef.current?.click()}
-                        disabled={requestStatus === 'draft' || isCompleted || isSubmittingReferenceFile || isSubmittingStepAttachment}
-                        sx={{ color: awaitingAttachment ? '#4f46e5' : 'text.secondary' }}
+                        disabled={isCompleted || isSubmittingReferenceFile || isSubmittingStepAttachment || isUploading}
+                        sx={{ color: (awaitingAttachment || canAttachMainFile) ? '#4f46e5' : 'text.secondary' }}
                       >
                         <AttachFileIcon sx={{ fontSize: 18 }} />
                       </IconButton>
@@ -1762,7 +2229,15 @@ const sendChatMessage = async (e) => {
 
                   <IconButton
                     type="submit"
-                    disabled={(!chatInput.trim() && !pendingFile) || isChatLoading || isSubmittingReferenceFile || isSubmittingStepAttachment || requestStatus === 'draft' || isCompleted}
+                    disabled={
+                      (!chatInput.trim() && !pendingFile) ||
+                      isChatLoading ||
+                      isSubmittingReferenceFile ||
+                      isSubmittingStepAttachment ||
+                      isUploading ||
+                      isCompleted ||
+                      (requestStatus === 'draft' && !pendingFile)
+                    }
                     sx={{
                       bgcolor: '#4f46e5',
                       color: '#fff',
@@ -1821,6 +2296,57 @@ const sendChatMessage = async (e) => {
           >
             {editSaving ? 'Saving…' : 'Save correction'}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Manual template selection: auto-match was inconclusive ──── */}
+      <Dialog open={showTemplateSelection} onClose={cancelTemplateSelection} fullWidth maxWidth="sm">
+        <DialogTitle>Which configuration task is this file for?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ color: 'text.secondary', mb: 2 }}>
+            {pendingUploadFile?.name ? `"${pendingUploadFile.name}" ` : 'This file '}
+            didn't clearly match a task template's expected columns. Pick the right one below.
+          </Typography>
+          {availableTemplates.length === 0 ? (
+            <Alert severity="warning">No task templates are available yet.</Alert>
+          ) : (
+            <Stack spacing={1}>
+              {availableTemplates.map((tpl) => (
+                <Paper
+                  key={tpl.id}
+                  variant="outlined"
+                  onClick={() => !isUploadingWithTemplate && uploadWithTemplate(tpl.id)}
+                  sx={{
+                    p: 1.5,
+                    borderRadius: 2,
+                    cursor: isUploadingWithTemplate ? 'wait' : 'pointer',
+                    '&:hover': { borderColor: 'primary.main', background: 'rgba(79,70,229,0.03)' },
+                  }}
+                >
+                  <Typography variant="body2" sx={{ fontWeight: 700 }}>{tpl.name}</Typography>
+                  {tpl.description && (
+                    <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+                      {tpl.description}
+                    </Typography>
+                  )}
+                  {tpl.expected_columns?.length > 0 && (
+                    <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mt: 0.5 }}>
+                      Expected columns: {tpl.expected_columns.join(', ')}
+                    </Typography>
+                  )}
+                </Paper>
+              ))}
+            </Stack>
+          )}
+          {isUploadingWithTemplate && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
+              <CircularProgress size={16} />
+              <Typography variant="caption" sx={{ color: 'text.secondary' }}>Uploading and analysing...</Typography>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={cancelTemplateSelection} disabled={isUploadingWithTemplate}>Cancel</Button>
         </DialogActions>
       </Dialog>
       </Box>

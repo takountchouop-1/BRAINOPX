@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import math
 import uuid
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
@@ -12,8 +13,9 @@ from datetime import datetime
 from ..db.database import get_db
 from ..db.models import ConfigurationTask, ConfigurationRequest, ReportReferenceFile, ReportScriptVersion, StepAttachment, User
 from ..db.deps import get_current_user
-from ..services.excel_service import extract_column_headers
-from ..services.validation_service import validate_data_rows
+from ..services.excel_service import extract_column_headers, read_data_rows
+from ..services.validation_service import validate_data_rows, infer_column_rules
+from ..services import validation_service
 from ..services.template_matcher import auto_match_template, get_all_templates, get_match_summary
 from ..services.groq_service import get_ai_response, get_rule_aware_response, run_rule_workflow, parse_rules_to_json, generate_workflow_script, GroqNetworkError
 from ..services.rule_parser import extract_text
@@ -50,6 +52,52 @@ ALLOWED_STEP_ATTACHMENT_EXTENSIONS = STEP_ATTACHMENT_IMAGE_EXTENSIONS | STEP_ATT
 MAX_STEP_ATTACHMENT_SIZE = 15 * 1024 * 1024  # 15MB
 
 
+def _json_safe(value):
+    """
+    Recursively replaces any NaN/Infinity float (e.g. from a raw_rows
+    blob saved before _sanitize_row existed) with None, so an
+    already-corrupted stored request self-heals on read instead of
+    permanently 500ing GET /{request_id}.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+def _sanitize_row(row_data: dict) -> dict:
+    """
+    pandas represents a blank Excel cell as float('nan') even under
+    dtype=str (the dtype hint only casts non-null values). NaN survives
+    json.dumps() fine, but Starlette's JSONResponse rejects it outright
+    (ValueError: Out of range float values are not JSON compliant), which
+    crashed GET /{request_id} for any request whose analysis_state ended
+    up storing one of these rows. Blank cells become None here instead,
+    the same way excel_service.read_data_rows()'s openpyxl-based reader
+    already represents them.
+    """
+    return {
+        key: (None if isinstance(value, float) and pd.isna(value) else value)
+        for key, value in row_data.items()
+    }
+
+
+def _file_url(path: str | None) -> str | None:
+    """
+    Turns a stored file path (e.g. "uploads\\requests\\xxx.xlsx") into
+    the URL it's served at — main.py mounts the "uploads" directory at
+    /uploads — so the frontend can open/download the original file
+    directly (e.g. to fix a flagged cell in Excel and resubmit it).
+    """
+    if not path:
+        return None
+    normalized = path.replace("\\", "/").lstrip("/")
+    return f"/{normalized}"
+
+
 def _rules_text_of(task) -> str:
     """
     task.rules_content is sometimes a raw string, sometimes a JSON blob
@@ -65,25 +113,113 @@ def _rules_text_of(task) -> str:
         return task.rules_content or ""
 
 
+def _structural_welcome_message(
+    task_name: str,
+    match_score: float,
+    match_summary: dict,
+    validation_errors: list,
+) -> str:
+    """
+    Fallback AI message for a report_analyses task with no per-rule or
+    per-column engine to run (no rules_context, no column_rules — e.g.
+    the task was created without a target table). Without this, the
+    chat panel is left completely empty after upload even though the
+    file was received and column-matched, which reads as "nothing
+    happened". Built entirely from data already computed on upload, so
+    it needs no extra AI call.
+    """
+    matched = sorted(match_summary.get("matched_columns") or [])
+    missing = sorted(match_summary.get("missing_columns") or [])
+    extra = sorted(match_summary.get("extra_columns") or [])
+
+    lines = [f"Thanks for the upload! I've matched your file to **'{task_name}'** ({match_score}% match)."]
+    if matched:
+        lines.append(f"- **Matched columns:** {', '.join(matched)}")
+    if missing:
+        lines.append(f"- **Missing columns:** {', '.join(missing)} — could you add them and upload the file again?")
+    if extra:
+        lines.append(f"- **Extra columns not expected by this task:** {', '.join(extra)} — no worries, I'll just ignore those.")
+    if validation_errors:
+        lines.append(
+            f"- **Row-level issues found:** {len(validation_errors)} — nothing we can't sort out together, "
+            "take a look at the Validation Report below and we'll go through them one by one."
+        )
+    if not missing and not validation_errors:
+        lines.append("Great news — your file looks structurally correct against this task's expected columns.")
+
+    return "\n\n".join(lines)
+
+
+def _infer_and_persist_column_rules(db: Session, task: ConfigurationTask) -> list:
+    """
+    Self-heals a report_analyses task created before column-rule
+    inference existed (no target_table, no column_rules): infers a rule
+    set from the task's own Excel template — the same source a
+    newly-created task now gets its rules from — and persists it so
+    this only has to run once per task, not on every upload.
+    """
+    if not task.template_file_path or not os.path.exists(task.template_file_path):
+        return []
+
+    try:
+        headers = extract_column_headers(task.template_file_path)
+        template_rows = read_data_rows(task.template_file_path)
+    except HTTPException:
+        return []
+
+    inferred = infer_column_rules(headers, template_rows)
+    if inferred:
+        task.column_rules = json.dumps(inferred)
+        db.commit()
+
+    return inferred
+
+
+_REFERENCE_FILE_QUESTIONS = {
+    "missing_value": "Row {row}, column '{column}' is missing a value. Could you send the correct value, or upload a production extract that has it?",
+    "invalid_format": "Row {row}, column '{column}' has a value in the wrong format. Could you send a corrected value, or upload a production extract that has it?",
+    "duplicate": "Row {row}, column '{column}' duplicates a value used elsewhere in the file. Could you send the correct value?",
+    "negative_value": "Row {row}, column '{column}' has a negative value, which doesn't look right for this field. Could you send the correct value?",
+    "unknown_code": "I couldn't find code '{code}' (row {row}, column '{column}') in the database. Could you upload a production extract so I can cross-check it?",
+    "inconsistent_value": "Row {row}, column '{column}' disagrees with another row describing the same record. Could you tell me which value is correct?",
+    "incomplete_relationship": "Row {row}, column '{column}' references a database record that is itself missing required data. Could you upload a production extract with the complete record?",
+    "duplicate_row": "Row {row} looks like a duplicate of another row — same values across every column. Could you confirm whether this is intentional, or tell me the correct value(s)?",
+    "invalid_choice": "Row {row}, column '{column}' isn't one of the template's allowed choices. Could you send the correct value?",
+    "out_of_range": "Row {row}, column '{column}' is outside the range the template allows. Could you send the correct value?",
+    "invalid_length": "Row {row}, column '{column}' has the wrong length for the template's rule. Could you send the correct value?",
+    "formula_mismatch": "Row {row}, column '{column}' doesn't match the template's own formula. Could you send the correct value?",
+}
+
+
 def _run_report_analysis_check(
     db: Session,
     request: ConfigurationRequest,
     task: ConfigurationTask,
     data_rows: list[dict],
+    validation_errors: list[dict],
 ) -> None:
     """
-    DB-first unknown-code detection for report_analyses tasks (see
-    report_analysis_service.py). A safe no-op for tasks whose
-    column_rules have no foreign-key columns — most requests are
-    unaffected and keep going through the existing single-pass flow.
+    Full anomaly scan for report_analyses tasks (see
+    report_analysis_service.py): unknown FK codes, missing values,
+    invalid formats, duplicates, inconsistent values, and incomplete
+    relationships all get seeded as anomalies that can be resolved
+    through the same correction / reference-file / decision actions.
 
-    When anomalies are found, appends a summary to the conversation
-    and advances current_stage/status so the request shows as needing
-    more input, without touching the step-by-step / rule-engine flows
-    above this call.
+    Mutates validation_errors in place (each entry gets an
+    anomaly_id) — the caller must re-persist it after this returns.
+
+    Appends one grouped summary to the conversation and advances
+    current_stage/status so the request shows as needing more input,
+    without touching the step-by-step / rule-engine flows above this
+    call.
     """
 
     if not task.column_rules:
+        logger.warning(
+            "report_analyses task %s (%s) has no column_rules — skipping anomaly scan; "
+            "the file was only checked for column-header matches.",
+            task.id, task.name,
+        )
         return
 
     try:
@@ -91,22 +227,20 @@ def _run_report_analysis_check(
     except (json.JSONDecodeError, TypeError, ValueError):
         return
 
-    if not any(isinstance(r, dict) and r.get("foreign_key") for r in column_rules):
-        return
-
-    state = report_analysis_service.run_db_anomaly_check(
-        db, request, data_rows, column_rules, task_type=task.category,
+    state = report_analysis_service.run_full_anomaly_scan(
+        db, request, data_rows, column_rules, validation_errors, task_type=task.category,
     )
 
-    if not state.get("anomalies"):
-        return
-
+    # Always runs, even with zero anomalies — build_anomaly_summary_message
+    # and sync_stage_from_state both handle that case correctly (a
+    # friendly "all clear" message and advancing to "validated"), and
+    # skipping them here would leave a resubmitted, now-clean file stuck
+    # at its old status.
     pending = report_analysis_service.pending_reference_requests(request)
     for anomaly in pending:
-        question = (
-            f"I couldn't find code '{anomaly['code']}' (row {anomaly['row']}, "
-            f"column '{anomaly['column']}') in the database. Could you upload a "
-            "production extract so I can cross-check it?"
+        template = _REFERENCE_FILE_QUESTIONS.get(anomaly["kind"], _REFERENCE_FILE_QUESTIONS["unknown_code"])
+        question = template.format(
+            row=anomaly.get("row"), column=anomaly.get("column"), code=anomaly.get("code"),
         )
         report_analysis_service.record_question_asked(db, request, anomaly["id"], question)
 
@@ -285,15 +419,23 @@ def upload_file(
     df = pd.read_excel(saved_path, dtype=str)
     data_rows = []
     for idx, row in df.iterrows():
-        row_data = row.to_dict()
+        row_data = _sanitize_row(row.to_dict())
         row_data["_row_number"] = idx + 2  # Excel row number (1-indexed, skipping header)
         data_rows.append(row_data)
     
-    # Run validation using the matched task
+    # Run validation using the matched task's column rules — falling back
+    # to a rule set inferred from the uploaded file's own data when the
+    # task has no target_table configured (no DB-derived column_rules),
+    # so the file still gets real per-row validation instead of only a
+    # column-header match.
     validation_errors = []
     if matched_task.column_rules:
         column_rules = json.loads(matched_task.column_rules) if matched_task.column_rules else []
         validation_errors = validate_data_rows(db, data_rows, column_rules)
+    elif matched_task.category == "report_analyses":
+        inferred_rules = _infer_and_persist_column_rules(db, matched_task)
+        if inferred_rules:
+            validation_errors = validate_data_rows(db, data_rows, inferred_rules)
     
     # Run the rule engine — evaluate the uploaded file against the task's rules.
     # Each rule triggers its own AI workflow; the AI responds instantly based on
@@ -324,6 +466,19 @@ def upload_file(
                 "Please tell me what you'd like to achieve and I'll guide you."
             )
 
+    # Get match summary — computed early so the fallback welcome message
+    # below (for tasks with no per-rule/column engine, e.g. a
+    # report_analyses task created without a target table) can describe
+    # what it found instead of leaving the chat panel empty.
+    uploaded_columns = extract_column_headers(saved_path)
+    expected_columns = json.loads(matched_task.expected_columns) if matched_task.expected_columns else []
+    match_summary = get_match_summary(uploaded_columns, expected_columns)
+
+    if not ai_welcome_message:
+        ai_welcome_message = _structural_welcome_message(
+            matched_task.name, match_score, match_summary, validation_errors
+        )
+
     # Initial conversation: seed with the AI's instant rule-aware response
     conversation = []
     if ai_welcome_message:
@@ -333,11 +488,24 @@ def upload_file(
             "timestamp": datetime.now().isoformat(),
         })
 
+    # No rules_context means there's no step-by-step workflow to walk the
+    # user through (that's the only thing gated on rules_context below) —
+    # whether or not column_rules validation ran, the request has nothing
+    # left to do, so reflect the analysis outcome right away instead of
+    # leaving it stuck at "file_submitted" forever.
+    initial_status = "file_submitted"
+    if not rules_context:
+        initial_status = (
+            "additional_information_required"
+            if (match_summary["missing_columns"] or validation_errors)
+            else "data_validated"
+        )
+
 # Create the configuration request
     new_request = ConfigurationRequest(
         task_id=matched_task.id,
         user_id=current_user.id,
-        status="file_submitted",
+        status=initial_status,
         uploaded_filename=file.filename,
         uploaded_file_path=saved_path,
         validation_errors=json.dumps(validation_errors),
@@ -349,9 +517,12 @@ def upload_file(
     db.commit()
     db.refresh(new_request)
 
-    # DB-first unknown-code detection — no-op unless the task's target
-    # table has foreign-key columns.
-    _run_report_analysis_check(db, new_request, matched_task, data_rows)
+    # Full anomaly scan — no-op if the task has no column_rules at all.
+    # Mutates validation_errors in place (stamps anomaly_id onto each
+    # entry), so it must be re-persisted afterward.
+    _run_report_analysis_check(db, new_request, matched_task, data_rows, validation_errors)
+    new_request.validation_errors = json.dumps(validation_errors)
+    db.commit()
 
     # ── STEP-BY-STEP WORKFLOW INIT ──────────────────────────────────
     # If the task has rules, initialise the step-by-step workflow so the
@@ -377,11 +548,6 @@ def upload_file(
         except Exception:
             # If workflow init fails, fall back to the existing conversation
             pass
-    
-    # Get match summary
-    uploaded_columns = extract_column_headers(saved_path)
-    expected_columns = json.loads(matched_task.expected_columns) if matched_task.expected_columns else []
-    match_summary = get_match_summary(uploaded_columns, expected_columns)
 
     # Re-sync from the DB: _run_report_analysis_check (and/or the
     # step-by-step init above) may have appended to new_request.conversation
@@ -405,6 +571,7 @@ def upload_file(
         "match_score": match_score,
         "match_summary": match_summary,
         "uploaded_file": file.filename,
+        "file_url": _file_url(saved_path),
     }
 
 
@@ -450,15 +617,20 @@ def upload_file_with_template(
     df = pd.read_excel(saved_path, dtype=str)
     data_rows = []
     for idx, row in df.iterrows():
-        row_data = row.to_dict()
+        row_data = _sanitize_row(row.to_dict())
         row_data["_row_number"] = idx + 2
         data_rows.append(row_data)
     
-    # Run validation
+    # Run validation — same fallback as /upload: infer rules from the
+    # file's own data when the task has no target_table configured.
     validation_errors = []
     if task.column_rules:
         column_rules = json.loads(task.column_rules) if task.column_rules else []
         validation_errors = validate_data_rows(db, data_rows, column_rules)
+    elif task.category == "report_analyses":
+        inferred_rules = _infer_and_persist_column_rules(db, task)
+        if inferred_rules:
+            validation_errors = validate_data_rows(db, data_rows, inferred_rules)
     
     # Run the rule engine — evaluate the uploaded file against the task's rules.
     rule_results = []
@@ -485,6 +657,18 @@ def upload_file_with_template(
                 "Please tell me what you'd like to achieve and I'll guide you."
             )
 
+    # Match summary — no auto-match score here (the user picked the
+    # template directly), but the column comparison is still useful, and
+    # feeds the fallback welcome message below just like /upload.
+    uploaded_columns = extract_column_headers(saved_path)
+    expected_columns = json.loads(task.expected_columns) if task.expected_columns else []
+    match_summary = get_match_summary(uploaded_columns, expected_columns)
+
+    if not ai_welcome_message:
+        ai_welcome_message = _structural_welcome_message(
+            task.name, 100.0, match_summary, validation_errors
+        )
+
     conversation = []
     if ai_welcome_message:
         conversation.append({
@@ -493,11 +677,19 @@ def upload_file_with_template(
             "timestamp": datetime.now().isoformat(),
         })
 
+    initial_status = "file_submitted"
+    if not rules_context:
+        initial_status = (
+            "additional_information_required"
+            if (match_summary["missing_columns"] or validation_errors)
+            else "data_validated"
+        )
+
     # Create the configuration request
     new_request = ConfigurationRequest(
         task_id=task.id,
         user_id=current_user.id,
-        status="file_submitted",
+        status=initial_status,
         uploaded_filename=file.filename,
         uploaded_file_path=saved_path,
         validation_errors=json.dumps(validation_errors),
@@ -509,10 +701,40 @@ def upload_file_with_template(
     db.commit()
     db.refresh(new_request)
 
-    # DB-first unknown-code detection — no-op unless the task's target
-    # table has foreign-key columns.
-    _run_report_analysis_check(db, new_request, task, data_rows)
+    # Full anomaly scan — no-op if the task has no column_rules at all.
+    # Mutates validation_errors in place (stamps anomaly_id onto each
+    # entry), so it must be re-persisted afterward.
+    _run_report_analysis_check(db, new_request, task, data_rows, validation_errors)
+    new_request.validation_errors = json.dumps(validation_errors)
+    db.commit()
 
+    # ── STEP-BY-STEP WORKFLOW INIT ──────────────────────────────────
+    # Mirrors /upload: if the task has rules, initialise the step-by-step
+    # workflow so the AI guides the user through each rule one at a time,
+    # regardless of whether the template was auto-matched or hand-picked.
+    step_progress = None
+    if rules_context:
+        try:
+            init_step_workflow(new_request, db, rules_context)
+            initial_step_message = get_step_initial_message(new_request, db)
+            step_progress = get_workflow_progress(new_request)
+
+            conversation = []
+            if initial_step_message:
+                conversation.append({
+                    "sender": "ai",
+                    "text": initial_step_message,
+                    "timestamp": datetime.now().isoformat(),
+                })
+            new_request.conversation = json.dumps(conversation)
+            db.commit()
+        except Exception:
+            # If workflow init fails, fall back to the existing conversation
+            pass
+
+    # Re-sync from the DB: _run_report_analysis_check (and/or the
+    # step-by-step init above) may have appended to new_request.conversation
+    # since the local `conversation` variable was last built.
     try:
         conversation = json.loads(new_request.conversation) if new_request.conversation else []
     except (json.JSONDecodeError, TypeError, ValueError):
@@ -528,7 +750,102 @@ def upload_file_with_template(
         "rule_results": rule_results,
         "ai_welcome_message": ai_welcome_message,
         "conversation": conversation,
+        "step_progress": step_progress,
+        "match_summary": match_summary,
         "uploaded_file": file.filename,
+        "file_url": _file_url(saved_path),
+    }
+
+
+@router.post("/{request_id}/resubmit-file")
+def resubmit_corrected_file(
+    request_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Swap in a corrected version of the uploaded file — the "open it in
+    Excel, fix the flagged cells, send it back" loop: the user
+    downloads the file via this request's file_url, corrects it
+    locally, and resubmits it here instead of typing each correction
+    into the chat. Re-runs the same validation/anomaly scan /upload
+    and /upload-with-template run on first upload, against this same
+    request (not a new one), so the conversation and any
+    already-resolved anomalies carry forward.
+    """
+    request = _get_request_or_404(db, request_id)
+
+    task = db.query(ConfigurationTask).filter(ConfigurationTask.id == request.task_id).first()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found.")
+
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in {".xlsx", ".xls", ".csv"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only .xlsx, .xls, or .csv files are supported.",
+        )
+
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+    saved_path = os.path.join(UPLOAD_DIR, unique_name)
+    with open(saved_path, "wb") as buffer:
+        buffer.write(file.file.read())
+
+    df = pd.read_excel(saved_path, dtype=str)
+    data_rows = []
+    for idx, row in df.iterrows():
+        row_data = _sanitize_row(row.to_dict())
+        row_data["_row_number"] = idx + 2
+        data_rows.append(row_data)
+
+    validation_errors = []
+    if task.column_rules:
+        column_rules = json.loads(task.column_rules)
+        validation_errors = validate_data_rows(db, data_rows, column_rules)
+    elif task.category == "report_analyses":
+        inferred_rules = _infer_and_persist_column_rules(db, task)
+        if inferred_rules:
+            validation_errors = validate_data_rows(db, data_rows, inferred_rules)
+
+    old_path = request.uploaded_file_path
+    request.uploaded_filename = file.filename
+    request.uploaded_file_path = saved_path
+    request.validation_errors = json.dumps(validation_errors)
+    db.commit()
+    _remove_uploaded_file(old_path)
+
+    conversation = []
+    if request.conversation:
+        try:
+            conversation = json.loads(request.conversation)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            conversation = []
+    conversation.append({
+        "sender": "ai",
+        "text": "Thanks for sending that back! Let me take another look at your corrected file.",
+        "timestamp": datetime.now().isoformat(),
+    })
+    request.conversation = json.dumps(conversation)
+    db.commit()
+
+    # Mutates validation_errors in place (anomaly_id stamped on each
+    # entry) and appends its own summary turn to the conversation.
+    _run_report_analysis_check(db, request, task, data_rows, validation_errors)
+    request.validation_errors = json.dumps(validation_errors)
+    db.commit()
+
+    conversation = json.loads(request.conversation) if request.conversation else []
+
+    return {
+        "request_id": request_id,
+        "uploaded_file": file.filename,
+        "file_url": _file_url(saved_path),
+        "status": request.status,
+        "current_stage": request.current_stage,
+        "validation_errors": validation_errors,
+        "conversation": conversation,
+        "all_resolved": report_analysis_service.all_resolved(request),
     }
 
 
@@ -1388,10 +1705,10 @@ def get_request(
     eval_profile = None
     if request.eval_profile:
         try:
-            eval_profile = json.loads(request.eval_profile)
+            eval_profile = _json_safe(json.loads(request.eval_profile))
         except:
             eval_profile = None
-    
+
     generated_script = request.generated_script
     analysis_state = eval_profile.get("analysis_state") if isinstance(eval_profile, dict) else None
 
@@ -1406,7 +1723,10 @@ def get_request(
         "generated_script": generated_script,
         "anomalies": (analysis_state or {}).get("anomalies", []),
         "unresolved_issues": (analysis_state or {}).get("unresolved_issues", []),
+        "correction_mode": (analysis_state or {}).get("correction_mode"),
+        "needs_correction_mode_choice": report_analysis_service.needs_correction_mode_choice(analysis_state or {}),
         "uploaded_filename": request.uploaded_filename,
+        "file_url": _file_url(request.uploaded_file_path),
         "created_at": request.created_at,
         "updated_at": request.updated_at,
     }
@@ -1561,6 +1881,8 @@ def get_request_anomalies(
         "current_stage": request.current_stage,
         "anomalies": state.get("anomalies", []),
         "unresolved_issues": state.get("unresolved_issues", []),
+        "correction_mode": state.get("correction_mode"),
+        "needs_correction_mode_choice": report_analysis_service.needs_correction_mode_choice(state),
         "all_resolved": report_analysis_service.all_resolved(request),
     }
 
@@ -1645,8 +1967,8 @@ def submit_conflict_decision(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     ai_text = (
-        f"Got it — I'll {body.decision} that record."
-        + (" Everything is resolved now, ready to generate the script." if result["all_resolved"] else "")
+        f"Got it, I'll {body.decision} that record for you."
+        + (" That was the last one — everything's validated now, ready to generate your script whenever you are!" if result["all_resolved"] else "")
     )
 
     conversation = []
@@ -1668,6 +1990,136 @@ def submit_conflict_decision(
         "anomaly": result["anomaly"],
         "all_resolved": result["all_resolved"],
         "current_stage": request.current_stage,
+        "ai_response": ai_text,
+        "conversation": conversation,
+    }
+
+
+class CorrectionModeBody(BaseModel):
+    mode: str  # "chat" or "excel"
+
+
+@router.post("/{request_id}/correction-mode")
+def submit_correction_mode(
+    request_id: int,
+    body: CorrectionModeBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Records whether the user wants to fix flagged anomalies by typing
+    corrected values here in chat, or by reopening the Excel file and
+    resubmitting it. Asked once per request, right after anomalies are
+    first found (see report_analysis_service.needs_correction_mode_choice),
+    so the chat doesn't just assume one path — calling this again later
+    switches the choice.
+    """
+    request = _get_request_or_404(db, request_id)
+
+    try:
+        state = report_analysis_service.set_correction_mode(db, request, body.mode)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    if body.mode == "excel":
+        ai_text = (
+            "Sounds good — open the file below, fix the flagged rows, and "
+            "resubmit it here whenever you're ready and I'll check it again."
+        )
+    else:
+        ai_text = "Sounds good — go ahead and send me the corrected value for each one as you fix it."
+
+    conversation = []
+    if request.conversation:
+        try:
+            conversation = json.loads(request.conversation)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            conversation = []
+    conversation.append({
+        "sender": "ai",
+        "text": ai_text,
+        "timestamp": datetime.now().isoformat(),
+    })
+    request.conversation = json.dumps(conversation)
+    db.commit()
+
+    return {
+        "request_id": request_id,
+        "correction_mode": state["correction_mode"],
+        "current_stage": request.current_stage,
+        "ai_response": ai_text,
+        "conversation": conversation,
+    }
+
+
+class CorrectionBody(BaseModel):
+    anomaly_id: str
+    corrected_value: str
+
+
+@router.post("/{request_id}/correction")
+def submit_correction(
+    request_id: int,
+    body: CorrectionBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Submit a corrected value for a flagged row/column. Re-validates it
+    against the rule that was violated; on success, resolves the
+    anomaly and flips the matching Validation Report row to solved.
+    """
+    request = _get_request_or_404(db, request_id)
+
+    task = db.query(ConfigurationTask).filter(ConfigurationTask.id == request.task_id).first()
+    if not task or not task.column_rules:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This task has no column rules to validate against.")
+
+    column_rules = json.loads(task.column_rules)
+
+    try:
+        result = report_analysis_service.resolve_with_correction(
+            db, request, anomaly_id=body.anomaly_id, corrected_value=body.corrected_value,
+            column_rules=column_rules,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    validation_errors = json.loads(request.validation_errors) if request.validation_errors else []
+
+    if result["accepted"]:
+        validation_service.mark_error_solved(
+            validation_errors, user_message=body.corrected_value, anomaly_id=body.anomaly_id,
+        )
+        request.validation_errors = json.dumps(validation_errors)
+        ai_text = (
+            f"Nice, that fixes row {result['anomaly']['row']}, column '{result['anomaly']['column']}'."
+            + (" That was the last one — everything's validated now, ready to generate your script whenever you are!" if result.get("all_resolved") else "")
+        )
+    else:
+        ai_text = f"Hmm, that one doesn't quite work either: {result['reason']} Want to give it another try?"
+
+    conversation = []
+    if request.conversation:
+        try:
+            conversation = json.loads(request.conversation)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            conversation = []
+    conversation.append({
+        "sender": "ai",
+        "text": ai_text,
+        "timestamp": datetime.now().isoformat(),
+    })
+    request.conversation = json.dumps(conversation)
+    db.commit()
+
+    return {
+        "request_id": request_id,
+        "anomaly": result["anomaly"],
+        "accepted": result["accepted"],
+        "all_resolved": result.get("all_resolved", False),
+        "current_stage": request.current_stage,
+        "validation_errors": validation_errors,
         "ai_response": ai_text,
         "conversation": conversation,
     }

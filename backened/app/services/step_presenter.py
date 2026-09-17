@@ -67,6 +67,23 @@ _GENERIC_PROBLEM = (
 
 
 # ============================================================
+# RESPONSE ICONS
+#
+# Every state the walkthrough can be in maps to exactly one of
+# these — used consistently so the user can tell at a glance what
+# kind of reply they're reading without parsing the sentence first.
+# ============================================================
+
+ICON_PASS = "✅"        # accepted
+ICON_WARNING = "⚠️"     # valid but risky, needs a yes/no
+ICON_FAIL = "❌"        # rejected, or a hard stop
+ICON_INFO = "❓"        # the AI needs more from the user
+ICON_FIX = "\U0001f527"       # how-to-fix instructions
+ICON_SUMMARY = "\U0001f4cb"       # structured recap (escalation)
+ICON_DONE = "\U0001f389"        # whole walkthrough finished
+
+
+# ============================================================
 # MESSAGE ROLES
 # ============================================================
 
@@ -179,12 +196,12 @@ def what_to_provide(step: dict) -> str:
     if layout:
         if label.lower() in ("this step", ""):
             return layout
-        return f"Enter the {label}. {layout}"
+        return f"Now let's get the {label}. {layout}"
 
     if label.lower() in ("this step", ""):
-        return "Enter the value for this step."
+        return "Go ahead and send a value for this one."
 
-    return f"Enter the {label}."
+    return f"Now let's get the {label}."
 
 
 def example_for(step: dict, fallback: str = "") -> str:
@@ -374,7 +391,7 @@ def _table_collection_prompt(
         rows = progress.get("rows", [])
 
         blocks = [
-            block(ROLE_CONFIRMATION, f"Row {row_number} added."),
+            block(ROLE_CONFIRMATION, f"{ICON_PASS} Got row {row_number}."),
         ]
 
         rendered = composite_rules.render_table_html(columns, rows)
@@ -385,8 +402,7 @@ def _table_collection_prompt(
         blocks.append(
             block(
                 ROLE_INSTRUCTION,
-                "Type 'add' to enter another row, "
-                "or 'done' if this is all the rows.",
+                "Type 'add' for another row, or 'done' if that's everything.",
             )
         )
 
@@ -403,7 +419,7 @@ def _table_collection_prompt(
         blocks.append(
             block(
                 ROLE_INSTRUCTION,
-                f"Enter the {step_label(step)}, one field at a time.",
+                f"Let's build the {step_label(step)} one field at a time.",
             )
         )
 
@@ -416,7 +432,7 @@ def _table_collection_prompt(
             sample = ""
 
         if sample:
-            blocks.append(block(ROLE_EXAMPLE, f"Example: {sample}"))
+            blocks.append(block(ROLE_EXAMPLE, f"Something like: {sample}"))
 
     return blocks
 
@@ -443,7 +459,7 @@ def _list_collection_prompt(
         blocks.append(
             block(
                 ROLE_INSTRUCTION,
-                f"Enter the {step_label(step)}, one item at a time.",
+                f"Let's build the {step_label(step)} one item at a time.",
             )
         )
 
@@ -455,11 +471,11 @@ def _list_collection_prompt(
         sample = ""
 
     if sample:
-        blocks.append(block(ROLE_EXAMPLE, f"Example: {sample}"))
+        blocks.append(block(ROLE_EXAMPLE, f"Something like: {sample}"))
 
     if len(items) >= minimum:
         blocks.append(
-            block(ROLE_TEXT, "Type 'done' when you have entered all items.")
+            block(ROLE_TEXT, "Type 'done' once you've got them all in.")
         )
 
     return blocks
@@ -513,9 +529,9 @@ def build_field_problem_message(
     problems = problems[:_MAX_PROBLEMS]
 
     if len(problems) == 1:
-        blocks = [block(ROLE_PROBLEM, f"{field_label}: {problems[0]}")]
+        blocks = [block(ROLE_PROBLEM, f"{ICON_FAIL} {field_label}: {problems[0]}")]
     else:
-        blocks = [block(ROLE_PROBLEM, f"{field_label}:")]
+        blocks = [block(ROLE_PROBLEM, f"{ICON_FAIL} {field_label}:")]
         blocks.extend(
             block(ROLE_PROBLEM, f"- {problem}")
             for problem in problems
@@ -545,8 +561,8 @@ def build_collection_shortfall_message(
     blocks = [
         block(
             ROLE_PROBLEM,
-            f"At least {minimum} {noun}{'s' if minimum != 1 else ''} "
-            f"required. You have entered {have}.",
+            f"{ICON_FAIL} I need at least {minimum} {noun}{'s' if minimum != 1 else ''} "
+            f"— you've got {have} so far.",
         ),
     ]
 
@@ -572,10 +588,10 @@ def build_edit_success_message(
 
     shape = composite_rules.input_shape(step)
 
-    label_line = f"{step_label(step)} updated."
+    label_line = f"{ICON_PASS} Updated the {step_label(step)}."
 
     if shape not in composite_rules.COMPOSITE_SHAPES and _clean(submitted_value):
-        label_line = f'{step_label(step)} updated: "{_clean(submitted_value)}"'
+        label_line = f'{ICON_PASS} Updated the {step_label(step)}: "{_clean(submitted_value)}"'
 
     blocks = [block(ROLE_CONFIRMATION, label_line)]
 
@@ -629,27 +645,27 @@ def build_step_prompt(
         rendered = composite_rules.render_example_table(step)
 
         if rendered:
-            blocks.append(block(ROLE_TEXT, "Example input:"))
+            blocks.append(block(ROLE_TEXT, "Here's an example:"))
             blocks.append(block(ROLE_TABLE, rendered))
             return blocks
 
     value = example_for(step, example)
 
     if value:
-        blocks.append(block(ROLE_EXAMPLE, f"Example input: {value}"))
+        blocks.append(block(ROLE_EXAMPLE, f"Something like {value} works."))
 
         explanation = explanation_for(step)
 
         if explanation:
-            blocks.append(block(ROLE_TEXT, f"Format: {explanation}"))
+            blocks.append(block(ROLE_TEXT, explanation))
 
     elif step.get("example_source") == "ai_unavailable":
         blocks.append(
             block(
                 ROLE_PROBLEM,
-                "The AI service could not generate an example for "
-                "this step right now. You can still enter a value — "
-                "it will be checked against the rule as usual.",
+                "I couldn't come up with an example for this one right "
+                "now — go ahead and send a value anyway, I'll still "
+                "check it.",
             )
         )
 
@@ -676,10 +692,7 @@ def build_failure_message(
     label = step_label(step)
 
     blocks = [
-        block(
-            ROLE_HEADING,
-            f"{step_heading(step, step_index, total)} — not accepted",
-        ),
+        block(ROLE_HEADING, step_heading(step, step_index, total)),
     ]
 
     # Show a table step's rows back with the failing cells marked, so
@@ -699,62 +712,54 @@ def build_failure_message(
         if submitted:
             blocks.append(block(ROLE_TABLE, submitted))
 
-    elif _clean(submitted_value):
-        # Quotes the value back so the problem below reads against
-        # what was actually typed, not just against the rule.
-        blocks.append(
-            block(ROLE_TEXT, f'You entered: "{_clean(submitted_value)}"')
-        )
-
     problems = problems_from(verdict)
 
-    if len(problems) == 1:
-        blocks.append(
-            block(ROLE_PROBLEM, f"What is missing: {problems[0]}")
-        )
-    else:
-        blocks.append(block(ROLE_PROBLEM, "What is missing:"))
-        blocks.extend(
-            block(ROLE_PROBLEM, f"- {problem}")
-            for problem in problems
-        )
+    blocks.append(
+        block(ROLE_PROBLEM, f"{ICON_FAIL} FAIL: {problems[0]}")
+    )
+    blocks.extend(
+        block(ROLE_PROBLEM, f"- {problem}")
+        for problem in problems[1:]
+    )
 
-    # What previous users did to get past this same error. Offered
-    # before the generated example, since it is evidence of something
-    # that actually worked here.
+    # What previous users did to get past this same error — offered
+    # instead of the generated example when it's available, since it's
+    # evidence of something that actually worked here.
 
     hint = _clean(learned_hint)
 
     value = example_for(step, corrected_example)
-
-    if hint and hint != value:
-        blocks.append(
-            block(
-                ROLE_TEXT,
-                f"Others got past this by entering: {hint}",
-            )
-        )
 
     if composite_rules.input_shape(step) == composite_rules.SHAPE_TABLE:
 
         corrected = composite_rules.render_example_table(step)
 
         if corrected:
-            blocks.append(block(ROLE_TEXT, "Use this layout instead:"))
+            blocks.append(block(ROLE_TEXT, f"{ICON_FIX} How to fix:"))
+            blocks.append(block(ROLE_TEXT, "1. Try this layout instead:"))
             blocks.append(block(ROLE_TABLE, corrected))
             blocks.append(
-                block(ROLE_INSTRUCTION, f"Please enter the {label} again.")
+                block(ROLE_INSTRUCTION, f"2. Give the {label} another shot.")
             )
+            blocks.append(block(ROLE_TEXT, "Please correct and try again."))
             return blocks
 
-    if value:
+    best_example = hint if (hint and hint != value) else value
+
+    blocks.append(block(ROLE_TEXT, f"{ICON_FIX} How to fix:"))
+
+    step_num = 1
+
+    if best_example:
         blocks.append(
-            block(ROLE_EXAMPLE, f"Use this format instead: {value}")
+            block(ROLE_EXAMPLE, f"{step_num}. Try something like: {best_example}")
         )
+        step_num += 1
 
     blocks.append(
-        block(ROLE_INSTRUCTION, f"Please enter the {label} again.")
+        block(ROLE_INSTRUCTION, f"{step_num}. Give the {label} another shot.")
     )
+    blocks.append(block(ROLE_TEXT, "Please correct and try again."))
 
     return blocks
 
@@ -773,30 +778,20 @@ def build_warning_message(
     decline — the step does not advance until they answer either way.
     """
 
-    label = step_label(step)
-
     blocks = [
-        block(
-            ROLE_HEADING,
-            f"{step_heading(step, step_index, total)} — accepted with a warning",
-        ),
+        block(ROLE_HEADING, step_heading(step, step_index, total)),
     ]
 
     if _clean(example):
-        blocks.append(block(ROLE_TEXT, f'You entered: "{_clean(example)}"'))
+        blocks.append(block(ROLE_TEXT, f'You sent: "{_clean(example)}"'))
 
     reason = _clean(warning_reason) or (
-        "This value is unusual — please confirm before continuing."
+        "That's a bit unusual — worth double-checking before I move on."
     )
-    blocks.append(block(ROLE_PROBLEM, reason))
+    blocks.append(block(ROLE_PROBLEM, f"{ICON_WARNING} WARNING: {reason}"))
 
-    blocks.append(
-        block(
-            ROLE_INSTRUCTION,
-            f"Type 'yes' to continue with this {label} anyway, "
-            "or 'no' to enter a different value.",
-        )
-    )
+    blocks.append(block(ROLE_INSTRUCTION, "Do you want to continue?"))
+    blocks.append(block(ROLE_TEXT, "[YES] [NO]"))
 
     return blocks
 
@@ -818,7 +813,7 @@ def build_warning_declined_message(
     blocks = [
         block(
             ROLE_CONFIRMATION,
-            "That value was not used. Let's try a different one.",
+            f"{ICON_FAIL} Staying on STEP {step_index + 1}.",
         ),
     ]
 
@@ -849,31 +844,28 @@ def build_need_more_info_message(
         if str(topic).strip()
     ]
 
+    blocks.append(block(ROLE_PROBLEM, f"{ICON_INFO} I need more information."))
+
     if len(topics) == 1:
-        blocks.append(
-            block(
-                ROLE_PROBLEM,
-                f"Almost there — please also address: {topics[0]}",
-            )
-        )
+        blocks.append(block(ROLE_TEXT, f"Please add: {topics[0]}"))
     elif topics:
-        blocks.append(block(ROLE_PROBLEM, "Almost there — please also address:"))
+        blocks.append(block(ROLE_TEXT, "Please add:"))
         blocks.extend(
-            block(ROLE_PROBLEM, f"- {topic}")
+            block(ROLE_TEXT, f"- {topic}")
             for topic in topics
         )
     else:
         blocks.append(
             block(
-                ROLE_PROBLEM,
-                "A little more detail is needed before this can be accepted.",
+                ROLE_TEXT,
+                "I need a little more detail before this is good to go.",
             )
         )
 
     blocks.append(
         block(
             ROLE_INSTRUCTION,
-            "You can add to what you already wrote — no need to start over.",
+            "Please provide the requested information.",
         )
     )
 
@@ -900,13 +892,20 @@ def build_success_message(
 
     shape = composite_rules.input_shape(step)
 
-    # A plain single-value step quotes back exactly what was accepted,
-    # rather than just confirming the step name — the user can see the
-    # response is about the value they typed, not a generic pass.
-    label_line = f"{step_label(step)} accepted."
+    # A step accepted after a WARNING was explicitly confirmed reads as
+    # "Continuing" rather than a plain accept — the value was never in
+    # question, only whether the user wanted to keep it.
+    if step.get("warning_accepted"):
+        label_line = f"{ICON_PASS} Continuing."
 
-    if shape not in composite_rules.COMPOSITE_SHAPES and _clean(submitted_value):
-        label_line = f'{step_label(step)} accepted: "{_clean(submitted_value)}"'
+    else:
+        # A plain single-value step quotes back exactly what was accepted,
+        # rather than just confirming the step name — the user can see the
+        # response is about the value they typed, not a generic pass.
+        label_line = f"{ICON_PASS} {step_label(step)} accepted."
+
+        if shape not in composite_rules.COMPOSITE_SHAPES and _clean(submitted_value):
+            label_line = f'{ICON_PASS} {step_label(step)} accepted: "{_clean(submitted_value)}"'
 
     blocks = [block(ROLE_CONFIRMATION, label_line)]
 
@@ -934,12 +933,178 @@ def build_success_message(
     return blocks
 
 
+def build_moving_on_message(next_step: dict, step_index: int, total: int) -> list[dict]:
+    """
+    The short transition line between one step's confirmation and the
+    next step's prompt — read together they read as "accepted, moving
+    to STEP N: <name>", the same shape every step advance takes.
+    """
+
+    return [
+        block(
+            ROLE_TEXT,
+            f"Moving to STEP {step_index + 1}: {step_label(next_step)}.",
+        )
+    ]
+
+
+def build_skip_message(
+    step: dict,
+    step_index: int,
+    total: int,
+) -> list[dict]:
+    """
+    Confirms a step was skipped rather than answered.
+
+    Only reachable when the step's own rule does not require a value
+    — see guided_engine._step_is_optional. Never used on a step that
+    actually needs an answer; build_cannot_skip_message covers that.
+    """
+
+    return [
+        block(
+            ROLE_CONFIRMATION,
+            f"{ICON_PASS} Skipped — {step_label(step)} isn't required.",
+        ),
+    ]
+
+
+def build_cannot_skip_message(
+    step: dict,
+    step_index: int,
+    total: int,
+) -> list[dict]:
+    """
+    Told when the user asks to skip a step whose rule requires an
+    answer. Explains why, then re-shows the same prompt so they can
+    still just answer it.
+    """
+
+    blocks = [
+        block(
+            ROLE_PROBLEM,
+            f"{ICON_FAIL} Can't skip — {step_label(step)} is required. "
+            "Happy to help if you're not sure what to put though.",
+        ),
+    ]
+
+    blocks.extend(build_step_prompt(step, step_index, total))
+
+    return blocks
+
+
+def build_step_explanation_message(explanation: str) -> list[dict]:
+    """
+    The AI's plain-language answer to "explain this step", asked
+    while the walkthrough is parked waiting for something else (a
+    yes/no, a table field, an advance confirmation).
+
+    Always meant to be followed by whatever prompt block that parked
+    state still needs shown afterward — this alone does not repeat
+    it, so the user both gets their answer and is reminded what is
+    still being waited on.
+    """
+
+    text = (
+        explanation.strip()
+        if explanation and explanation.strip()
+        else "Here's a bit more detail on what this needs."
+    )
+
+    return [block(ROLE_TEXT, text)]
+
+
+def _escalation_menu_blocks() -> list[dict]:
+    return [
+        block(ROLE_INSTRUCTION, "Would you like to:"),
+        block(ROLE_TEXT, "[1] Escalate to expert"),
+        block(ROLE_TEXT, "[2] Try again"),
+    ]
+
+
+def build_escalation_offer_message(
+    step: dict,
+    step_index: int,
+    total: int,
+    attempts: int,
+) -> list[dict]:
+    """
+    Shown once the same step has failed several times in a row —
+    tallies the failed attempts, then offers a real choice instead of
+    another "how to fix" list.
+    """
+
+    blocks = [block(ROLE_HEADING, step_heading(step, step_index, total))]
+
+    blocks.extend(
+        block(ROLE_PROBLEM, f"Attempt {i}: Failed")
+        for i in range(1, attempts + 1)
+    )
+
+    blocks.append(
+        block(ROLE_PROBLEM, f"{ICON_WARNING} This issue requires expert assistance.")
+    )
+
+    blocks.extend(_escalation_menu_blocks())
+
+    return blocks
+
+
+def build_escalation_unclear_message(
+    step: dict,
+    step_index: int,
+    total: int,
+) -> list[dict]:
+    """The reply to the escalation menu wasn't recognized as 1 or 2."""
+
+    blocks = [block(ROLE_PROBLEM, "Please reply with 1 or 2.")]
+    blocks.extend(_escalation_menu_blocks())
+    return blocks
+
+
+def build_escalation_summary_message(
+    step: dict,
+    step_index: int,
+    total: int,
+    attempts: int,
+    verdict: dict,
+) -> list[dict]:
+    """Confirms the escalation and recaps it as a fixed-field summary."""
+
+    problems = problems_from(verdict, limit=1)
+    error_text = problems[0] if problems else _GENERIC_PROBLEM
+
+    return [
+        block(ROLE_PROBLEM, f"{ICON_WARNING} This requires expert assistance."),
+        block(ROLE_TEXT, f"{ICON_SUMMARY} Escalation Summary:"),
+        block(ROLE_TEXT, f"- Task: {step_label(step)}"),
+        block(ROLE_TEXT, f"- Step: {step_index + 1} of {total}"),
+        block(ROLE_TEXT, f"- Issue: {error_text}"),
+        block(ROLE_TEXT, f"- Attempts: {attempts}"),
+        block(ROLE_CONFIRMATION, "An expert has been notified."),
+    ]
+
+
+def build_escalation_retry_message(
+    step: dict,
+    step_index: int,
+    total: int,
+) -> list[dict]:
+    """User chose to try again instead of escalating — re-show the prompt."""
+
+    blocks = [block(ROLE_CONFIRMATION, f"{ICON_PASS} Okay, let's try again.")]
+    blocks.extend(build_step_prompt(step, step_index, total))
+    return blocks
+
+
 def build_all_completed_message(total: int) -> list[dict]:
     """Blocks for a finished walkthrough."""
 
     return [
-        block(ROLE_CONFIRMATION, f"All {total} steps completed."),
-        block(ROLE_TEXT, "Every value you entered was accepted."),
+        block(ROLE_CONFIRMATION, f"{ICON_DONE} Task completed successfully!"),
+        block(ROLE_TEXT, f"{ICON_SUMMARY} Summary:"),
+        block(ROLE_TEXT, f"All {total} steps passed successfully."),
+        block(ROLE_TEXT, "Thank you for using the BRAINOPX Assistant."),
     ]
 
 
@@ -962,12 +1127,12 @@ def _step_reminder(
     value = example_for(step, example)
 
     if value:
-        blocks.append(block(ROLE_EXAMPLE, f"Example input: {value}"))
+        blocks.append(block(ROLE_EXAMPLE, f"Something like {value} works."))
 
         explanation = explanation_for(step)
 
         if explanation:
-            blocks.append(block(ROLE_TEXT, f"Format: {explanation}"))
+            blocks.append(block(ROLE_TEXT, explanation))
 
     return blocks
 
@@ -987,10 +1152,10 @@ def build_off_track_message(
     it asked about something out of scope — then repeats what the
     step needs. The rule behind the step is not revealed here either.
 
-    ai_explanation, when given, is a fresh model-generated answer to a
-    QUESTION_STEP — the caller (guided_engine) already scoped that call
-    to this one rule, so it is shown as-is rather than replaced by the
-    generic "Here is what this step needs." line.
+    ai_explanation, when given, is a fresh model-generated reply from the
+    caller (guided_engine) — a QUESTION_STEP answer scoped to this one
+    rule, or a short CHITCHAT reply to a greeting/small talk — shown as-is
+    rather than replaced by the generic canned line for that intent.
     """
 
     from app.services import input_intent
@@ -1000,7 +1165,7 @@ def build_off_track_message(
     if intent == input_intent.EMPTY:
         opening = [
             block(ROLE_HEADING, heading),
-            block(ROLE_PROBLEM, "You have not entered anything yet."),
+            block(ROLE_PROBLEM, f"{ICON_FAIL} That came through empty — go ahead and send a value."),
         ]
 
     elif intent == input_intent.QUESTION_STEP:
@@ -1008,7 +1173,7 @@ def build_off_track_message(
             block(ROLE_HEADING, heading),
             block(
                 ROLE_TEXT,
-                ai_explanation.strip() if ai_explanation.strip() else "Here is what this step needs.",
+                ai_explanation.strip() if ai_explanation.strip() else "Here's what I need for this one.",
             ),
         ]
 
@@ -1017,8 +1182,8 @@ def build_off_track_message(
             block(ROLE_HEADING, heading),
             block(
                 ROLE_PROBLEM,
-                "I do not have information about that. I can only "
-                "help you complete the steps of this task.",
+                f"{ICON_FAIL} That's outside what I can help with here — I'm just "
+                "here to get you through this task.",
             ),
         ]
 
@@ -1027,7 +1192,7 @@ def build_off_track_message(
             block(ROLE_HEADING, heading),
             block(
                 ROLE_TEXT,
-                "Let's carry on with the task.",
+                ai_explanation.strip() if ai_explanation.strip() else "Ha, fair enough — let's keep going.",
             ),
         ]
 
@@ -1036,7 +1201,7 @@ def build_off_track_message(
             block(ROLE_HEADING, heading),
             block(
                 ROLE_PROBLEM,
-                "I did not understand that as an answer to this step.",
+                f"{ICON_FAIL} Not sure what to do with that one — let's try again.",
             ),
         ]
 
@@ -1061,15 +1226,16 @@ def build_request_attachment_message(
 
     return [
         block(ROLE_HEADING, step_heading(step, step_index, total)),
+        block(ROLE_PROBLEM, f"{ICON_INFO} I need more information."),
         block(
             ROLE_TEXT,
-            "I'm having trouble making this clear from words alone. "
-            "Could you attach a file or a screenshot showing what "
-            "you're working with? Use the paperclip button below.",
+            "Words aren't quite cutting it here — mind attaching a "
+            "file or a screenshot of what you're working with? "
+            "Paperclip button's right below.",
         ),
         block(
             ROLE_INSTRUCTION,
-            "Type 'skip' instead if you'd rather keep going without one.",
+            "Or just type 'skip' to keep going without one.",
         ),
     ]
 
@@ -1085,8 +1251,8 @@ def build_awaiting_attachment_reminder_message(
         block(ROLE_HEADING, step_heading(step, step_index, total)),
         block(
             ROLE_TEXT,
-            "Still waiting on that file or screenshot — attach it with "
-            "the paperclip button, or type 'skip' to continue without one.",
+            "Still waiting on that file or screenshot — paperclip "
+            "button below, or type 'skip' to move on without one.",
         ),
     ]
 
@@ -1104,10 +1270,11 @@ def build_attachment_processed_message(
 
     opening = [
         block(ROLE_HEADING, heading),
+        block(ROLE_CONFIRMATION, f"{ICON_PASS} File received."),
         block(
             ROLE_TEXT,
             ai_explanation.strip() if ai_explanation.strip()
-            else "Thanks — I've noted that. Here is what this step needs.",
+            else "Here's what I need for this one.",
         ),
     ]
 
@@ -1131,10 +1298,10 @@ def build_error_message(
         block(ROLE_HEADING, step_heading(step, step_index, total)),
         block(
             ROLE_PROBLEM,
-            "I hit an error while checking that and could not "
-            "complete the check. Nothing was recorded.",
+            f"{ICON_WARNING} Something went wrong on my end checking that — nothing "
+            "was recorded, so no harm done.",
         ),
-        block(ROLE_INSTRUCTION, "Please send the value again."),
+        block(ROLE_INSTRUCTION, "Go ahead and send it again."),
     ] + _step_reminder(step, step_index, total, example)
 
 
@@ -1155,6 +1322,7 @@ def build_network_error_message(
         block(ROLE_HEADING, step_heading(step, step_index, total)),
         block(
             ROLE_PROBLEM,
-            "Please check your network and retry.",
+            f"{ICON_WARNING} I can't reach the network right now — check your "
+            "connection and give it another try.",
         ),
     ] + _step_reminder(step, step_index, total, example)

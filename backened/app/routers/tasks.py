@@ -11,7 +11,9 @@ from ..db.models import ConfigurationTask, User
 from ..db.deps import get_current_user, get_current_admin_user
 from ..schemas.task import TaskResponse
 from ..services.excel_service import extract_column_headers, read_data_rows
+from ..services import excel_rule_parser
 from ..services.schema_introspection import get_table_column_rules
+from ..services.validation_service import infer_column_rules, infer_formula_rules
 from ..services.rule_parser import extract_text  # ✅ Correct import
 from ..services.groq_service import parse_rules_to_json, get_ai_response
 from ..services.example_utils import build_rules_with_examples
@@ -29,7 +31,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(RULES_UPLOAD_DIR, exist_ok=True)
 
 ALLOWED_EXTENSIONS_BY_CATEGORY = {
-    "report_analyses": {".xlsx"},
+    "report_analyses": {".xlsx", ".xlsm"},
     "skill_engine": {".txt", ".pdf", ".doc", ".docx"},
 }
 ALLOWED_EXTENSIONS = ALLOWED_EXTENSIONS_BY_CATEGORY.get("report_analyses", {".xlsx"})
@@ -111,6 +113,186 @@ def _store_rules_with_examples(task, rules_text: str):
 
         task.category_metadata = json.dumps(metadata)
     return rules
+
+
+def _merge_excel_column_rules(column_rules: list, extracted: list) -> list:
+    """
+    Folds excel_rule_parser's deterministic rules into an existing
+    column_rules list.
+
+    A data-validation-derived rule (rule_type "cell") merges its
+    constraint keys onto the existing rule for the same column name,
+    the same "deterministic constraints win" precedent
+    groq_service._merge_sql_rules already sets for SQL-derived rules.
+    A formula rule for a column already carrying one REPLACES it rather
+    than being appended alongside it — needed so re-running this (e.g.
+    the rescan-excel-rules endpoint) against the same template is
+    idempotent instead of piling up duplicate formula rules each time.
+    """
+    by_name = {r["name"]: r for r in column_rules if r.get("rule_type", "cell") == "cell"}
+    formula_index_by_name = {
+        r["name"]: i for i, r in enumerate(column_rules) if r.get("rule_type") == "formula"
+    }
+    merged = list(column_rules)
+
+    for rule in extracted:
+        if rule.get("rule_type") == "formula":
+            existing_index = formula_index_by_name.get(rule["name"])
+            if existing_index is not None:
+                merged[existing_index] = rule
+            else:
+                merged.append(rule)
+                formula_index_by_name[rule["name"]] = len(merged) - 1
+            continue
+
+        existing = by_name.get(rule["name"])
+        if existing is not None:
+            existing.update({k: v for k, v in rule.items() if k != "name"})
+        else:
+            merged.append(rule)
+            by_name[rule["name"]] = rule
+
+    return merged
+
+
+def _extract_and_merge_excel_rules(template_file_path: str, column_rules: list | None) -> dict:
+    """
+    Runs both excel_rule_parser (structural: real formulas, data
+    validation, conditional formatting, VBA) and
+    validation_service.infer_formula_rules (data-driven: a cross-
+    column relationship that holds exactly across every sample row,
+    for a template that encodes it as plain numbers rather than a live
+    formula) against one template file, and merges everything found
+    into `column_rules`.
+
+    A structural formula always wins over an inferred one for the
+    same column — infer_formula_rules is told to skip any column
+    excel_rule_parser already produced a formula for, so the two never
+    compete to merge onto the same rule.
+
+    Returns column_rules plus advisory/VBA text plus counts, so a
+    caller (creation, update, or the rescan endpoints) can report what
+    changed without re-deriving it.
+    """
+    extracted = excel_rule_parser.extract_excel_business_rules(template_file_path)
+    merged = list(column_rules or [])
+
+    if extracted["column_rules"]:
+        merged = _merge_excel_column_rules(merged, extracted["column_rules"])
+
+    structural_formula_columns = {
+        r["name"] for r in extracted["column_rules"] if r.get("rule_type") == "formula"
+    }
+
+    inferred = []
+    try:
+        headers = extract_column_headers(template_file_path)
+        template_rows = read_data_rows(template_file_path)
+        inferred = infer_formula_rules(headers, template_rows, exclude_columns=structural_formula_columns)
+    except HTTPException:
+        pass  # template unreadable for header/row extraction — the structural results above still stand
+
+    if inferred:
+        merged = _merge_excel_column_rules(merged, inferred)
+
+    vba_business_rules = []
+    if extracted["vba_text"]:
+        try:
+            vba_business_rules = parse_rules_to_json(extracted["vba_text"])
+        except Exception:
+            # Best-effort only: VBA is arbitrary code, so a parse
+            # failure here just means no business-logic rules were
+            # recovered from it this time — the raw macro source is
+            # still kept (see excel_vba_text), and nothing else about
+            # the task's rules depends on this succeeding.
+            logger.exception("Could not parse business-logic rules out of the extracted VBA source.")
+            vba_business_rules = []
+
+    return {
+        "column_rules": merged,
+        "rules_changed": bool(extracted["column_rules"]) or bool(inferred),
+        "advisory_notes": extracted["advisory_notes"],
+        "vba_text": extracted["vba_text"],
+        "vba_business_rules": vba_business_rules,
+        "validation_rules_found": sum(
+            1 for r in extracted["column_rules"] if r.get("rule_type", "cell") == "cell"
+        ),
+        "formula_rules_found": sum(1 for r in extracted["column_rules"] if r.get("rule_type") == "formula"),
+        "inferred_formula_rules_found": len(inferred),
+    }
+
+
+def _merge_excel_metadata(task: ConfigurationTask, result: dict) -> None:
+    """
+    Stores whatever _extract_and_merge_excel_rules found beyond
+    column_rules — conditional-formatting hints, raw VBA macro source,
+    and any business-logic rules Groq could read out of that macro
+    source — onto the task's category_metadata. Mutates `task` in
+    place; does not commit.
+
+    excel_vba_business_rules is advisory, like the VBA source it comes
+    from: nothing in the validation pipeline enforces it automatically
+    (VBA is arbitrary code, not a structural artifact like a formula or
+    a data-validation rule), but it's visible on the task for an admin
+    to review and, if it looks right, turn into an explicit rule.
+    """
+    if not (result["advisory_notes"] or result["vba_text"] or result.get("vba_business_rules")):
+        return
+
+    try:
+        metadata = json.loads(task.category_metadata) if task.category_metadata else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        metadata = {}
+
+    if result["advisory_notes"]:
+        metadata["excel_advisory_notes"] = result["advisory_notes"]
+    if result["vba_text"]:
+        metadata["excel_vba_text"] = result["vba_text"]
+    if result.get("vba_business_rules"):
+        metadata["excel_vba_business_rules"] = result["vba_business_rules"]
+
+    task.category_metadata = json.dumps(metadata)
+
+
+def _rescan_excel_rules_for_task(task: ConfigurationTask) -> dict:
+    """
+    Re-runs Excel rule extraction against a report_analyses task's
+    already-stored template file and merges anything it finds into the
+    task's column_rules / category_metadata — the same thing
+    create_task and update_task do at upload time, but callable again
+    later for a task whose template predates this extraction, or whose
+    template file was replaced on disk without going through the
+    upload endpoint.
+
+    Mutates `task` in place. Does not commit — callers own the
+    transaction, so a bulk rescan can commit once for every task
+    instead of once per task.
+    """
+    if task.category != "report_analyses":
+        return {"skipped": True, "reason": f"category is '{task.category}', not report_analyses"}
+
+    if not task.template_file_path or not os.path.exists(task.template_file_path):
+        return {"skipped": True, "reason": "no template file on disk for this task"}
+
+    existing_column_rules = json.loads(task.column_rules) if task.column_rules else []
+    result = _extract_and_merge_excel_rules(task.template_file_path, existing_column_rules)
+
+    if result["rules_changed"]:
+        task.column_rules = json.dumps(result["column_rules"])
+
+    _merge_excel_metadata(task, result)
+
+    return {
+        "skipped": False,
+        "validation_rules_found": result["validation_rules_found"],
+        "formula_rules_found": result["formula_rules_found"],
+        "inferred_formula_rules_found": result["inferred_formula_rules_found"],
+        "advisory_notes_found": len(result["advisory_notes"]),
+        "has_vba_source": bool(result["vba_text"]),
+        "vba_business_rules_found": len(result["vba_business_rules"]),
+    }
 
 
 def _task_to_response(task: ConfigurationTask) -> dict:
@@ -262,11 +444,34 @@ def create_task(
             "full_text": rules_text,
         })
 
-    # Get column rules from target table if provided
+    # Get column rules from the target table if provided, otherwise — for
+    # report_analyses — infer them straight from the uploaded Excel
+    # template, the same way a skill_engine task gets its rules from a
+    # parsed rules document at creation time. Parsed once here and reused
+    # on every future upload, instead of the template being nothing more
+    # than a column-header reference.
     column_rules = None
     target_table_clean = target_table.strip() or None
     if target_table_clean:
         column_rules = get_table_column_rules(engine, target_table_clean)
+    elif category == "report_analyses" and template_file_path:
+        column_rules = infer_column_rules(
+            json.loads(expected_columns) if expected_columns else [],
+            read_data_rows(template_file_path),
+        )
+
+    # Mine the template's own formulas, data validation, conditional
+    # formatting, and (for .xlsm) VBA macros for additional business
+    # rules — see excel_rule_parser.py — plus any cross-column
+    # relationship (e.g. Total = Qty * Price) that holds across every
+    # sample row even without a live formula behind it (see
+    # validation_service.infer_formula_rules). Data validation and
+    # formula rules (structural or inferred) are enforced like any
+    # other column_rule; conditional formatting and VBA are advisory.
+    excel_result = None
+    if category == "report_analyses" and template_file_path:
+        excel_result = _extract_and_merge_excel_rules(template_file_path, column_rules)
+        column_rules = excel_result["column_rules"]
 
     # Parse category_metadata if provided
     parsed_category_metadata = None
@@ -275,6 +480,33 @@ def create_task(
             parsed_category_metadata = json.loads(category_metadata)
         except (json.JSONDecodeError, TypeError, ValueError):
             parsed_category_metadata = None
+
+    if excel_result and (
+        excel_result["advisory_notes"] or excel_result["vba_text"] or excel_result["vba_business_rules"]
+    ):
+        parsed_category_metadata = parsed_category_metadata or {}
+        if excel_result["advisory_notes"]:
+            parsed_category_metadata["excel_advisory_notes"] = excel_result["advisory_notes"]
+        if excel_result["vba_text"]:
+            parsed_category_metadata["excel_vba_text"] = excel_result["vba_text"]
+        if excel_result["vba_business_rules"]:
+            # Advisory, like the VBA source it comes from: not
+            # auto-enforced (VBA is arbitrary code, not a structural
+            # artifact), but stored for an admin to review.
+            parsed_category_metadata["excel_vba_business_rules"] = excel_result["vba_business_rules"]
+
+    if excel_result and excel_result["vba_text"]:
+        # Kept as reference text for the AI assistant alongside the
+        # rules document, if any — the interpreted business-logic
+        # rules above are what's actually reviewable/usable, this is
+        # just the raw source they were read from.
+        rules_text = (
+            (rules_text + "\n\n" if rules_text else "")
+            + "=== VBA MACRO SOURCE (extracted from the uploaded Excel "
+            "template; may encode additional business rules) ===\n"
+            + excel_result["vba_text"]
+        )
+        rules_content = json.dumps({"full_text": rules_text})
 
     # Create the task with all fields
     new_task = ConfigurationTask(
@@ -415,6 +647,8 @@ def update_task(
             task.column_rules = json.dumps(get_table_column_rules(engine, target_table_clean))
 
     # Update template file if provided
+    rules_text = None
+    excel_result = None
     if file:
         ext = os.path.splitext(file.filename)[1].lower()
         effective_category = category or task.category or "report_analyses"
@@ -439,11 +673,30 @@ def update_task(
         task.template_filename = file.filename
         if effective_category == "report_analyses":
             task.expected_columns = json.dumps(extract_column_headers(saved_path))
+            # Re-infer column rules from the new template, unless a
+            # target_table drives them instead (handled above).
+            if not task.target_table:
+                task.column_rules = json.dumps(
+                    infer_column_rules(
+                        json.loads(task.expected_columns),
+                        read_data_rows(saved_path),
+                    )
+                )
         else:
             task.expected_columns = "[]"
 
+        # Mine the new template's own formulas, data validation,
+        # conditional formatting, VBA macros, and any cross-column
+        # relationship that holds across every sample row even without
+        # a live formula — see _extract_and_merge_excel_rules. Runs
+        # regardless of whether column_rules came from a target_table
+        # or from infer_column_rules just above.
+        if effective_category == "report_analyses":
+            existing_column_rules = json.loads(task.column_rules) if task.column_rules else []
+            excel_result = _extract_and_merge_excel_rules(saved_path, existing_column_rules)
+            task.column_rules = json.dumps(excel_result["column_rules"])
+
     # ✅ Update rules document if provided
-    rules_text = None
     if rules_file:
         rules_ext = os.path.splitext(rules_file.filename)[1].lower()
         if rules_ext not in ALLOWED_RULES_EXTENSIONS:
@@ -471,6 +724,27 @@ def update_task(
         task.rules_content = json.dumps({
             "full_text": rules_text,
         })
+
+    if excel_result:
+        _merge_excel_metadata(task, excel_result)
+
+        if excel_result["vba_text"]:
+            # Reference text for the AI assistant alongside the rules
+            # document, if any — appended, not fed into
+            # _store_rules_with_examples below: that call overwrites
+            # parsed_rules wholesale, so doing it with only the macro
+            # source (no rules_file this call) would silently wipe out
+            # rules parsed from an earlier, unrelated rules document.
+            # The macro source's own business-logic rules are already
+            # captured separately (excel_vba_business_rules, set by
+            # _merge_excel_metadata above); this is just its raw text.
+            full_text = (
+                (rules_text + "\n\n" if rules_text else "")
+                + "=== VBA MACRO SOURCE (extracted from the uploaded Excel "
+                "template; may encode additional business rules) ===\n"
+                + excel_result["vba_text"]
+            )
+            task.rules_content = json.dumps({"full_text": full_text})
 
     db.commit()
     db.refresh(task)
@@ -504,6 +778,69 @@ def delete_task(
     db.commit()
 
     return {"message": f"Task '{task.name}' deleted successfully", "success": True}
+
+
+@router.post("/{task_id}/rescan-excel-rules")
+def rescan_task_excel_rules(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user),
+):
+    """
+    Re-reads a report_analyses task's stored template file for
+    formulas, data validation, conditional formatting, and VBA, and
+    merges anything found into the task's column_rules /
+    category_metadata. Admin only.
+
+    For a task created before excel_rule_parser existed (or whose
+    template was never re-uploaded since), this is how it picks up the
+    new rules without an admin having to re-upload the same file.
+    Safe to call more than once — merging is idempotent.
+    """
+    task = db.query(ConfigurationTask).filter(ConfigurationTask.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found.")
+
+    result = _rescan_excel_rules_for_task(task)
+
+    if not result["skipped"]:
+        db.commit()
+        db.refresh(task)
+
+    return {"task_id": task.id, "task_name": task.name, **result}
+
+
+@router.post("/rescan-excel-rules")
+def rescan_all_excel_rules(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user),
+):
+    """
+    Bulk version of rescan_task_excel_rules: re-scans every active
+    report_analyses task's template file in one pass. Admin only.
+
+    One-time backfill for tasks created before excel_rule_parser
+    existed, and safe to re-run any time after (e.g. after improving
+    the extractor itself) since merging is idempotent.
+    """
+    tasks = (
+        db.query(ConfigurationTask)
+        .filter(ConfigurationTask.is_active == True, ConfigurationTask.category == "report_analyses")
+        .all()
+    )
+
+    results = []
+    for task in tasks:
+        result = _rescan_excel_rules_for_task(task)
+        results.append({"task_id": task.id, "task_name": task.name, **result})
+
+    db.commit()
+
+    return {
+        "scanned": len(results),
+        "updated": sum(1 for r in results if not r["skipped"]),
+        "results": results,
+    }
 
 
 @router.get("/explain")

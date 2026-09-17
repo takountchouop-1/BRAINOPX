@@ -7,16 +7,23 @@ from app.db.models import ConfigurationRequest, ConfigurationTask
 from app.services.groq_service import (
     parse_rules_to_json,
     generate_rule_example_with_retry,
+    run_rule_followup,
+    get_ai_response,
+    GroqNetworkError,
 )
 from app.services.validation_service import get_validation_stats
+from app.services import input_intent
+from app.services import report_analysis_service
 
 import json
+import logging
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -1791,6 +1798,173 @@ def _initial_message(
     return response
 
 
+def _answer_rule_question(
+    task_name: str,
+    rule: Dict[str, Any],
+    message: str,
+    history: List[Any],
+) -> str:
+    """
+    A plain-language answer to a question about the current rule,
+    instead of the canned intro/rejection text.
+    """
+
+    try:
+        answer = run_rule_followup(
+            rule=rule,
+            user_message=message,
+            conversation_history=history,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Rule follow-up failed: %s",
+            exc,
+        )
+        answer = ""
+
+    if answer:
+        return answer
+
+    return (
+        f"I'm here to help with **'{task_name}'**. "
+        f"The current field to fill in is "
+        f"**{rule.get('name', '')}** — "
+        + (
+            _text(rule.get("description"))
+            or "let me know once you have a value."
+        )
+    )
+
+
+# ============================================================================
+# REPORT ANALYSIS: NORMAL CONVERSATION, NOT A FIELD-BY-FIELD WALKTHROUGH
+#
+# A report_analyses task's column_rules describe how to validate every
+# row of an already-uploaded spreadsheet — they are not a sequence of
+# fields for one record. _load_task_rules()'s column_rules fallback
+# below (built for "Configuration Task Template" tasks with no rules
+# document) would otherwise turn those same column_rules into a
+# 20+ step "please provide a value for _File" walkthrough that resets
+# to its own step 1 welcome message on every unrelated chat turn.
+# Report analysis already has its own conversational state (anomalies,
+# corrections, reference files, decisions — report_analysis_service.py)
+# surfaced through dedicated endpoints/UI actions; free-text chat here
+# just needs to talk about that state naturally.
+# ============================================================================
+
+def _report_analysis_context(state: Dict[str, Any]) -> str:
+
+    anomalies = [
+        a
+        for a in (state.get("anomalies") or [])
+        if isinstance(a, dict) and a.get("status") == "open"
+    ]
+
+    if not anomalies:
+        return (
+            "No open issues remain on this upload — every anomaly has "
+            "already been resolved."
+        )
+
+    lines = [f"{len(anomalies)} open issue(s) on this upload:"]
+
+    for anomaly in anomalies[:30]:
+
+        lines.append(
+            f"- Row {anomaly.get('row')}, column "
+            f"'{anomaly.get('column')}': {anomaly.get('kind')} "
+            f"(value: {anomaly.get('code')!r})"
+        )
+
+    lines.append(
+        "\nFor each open issue the user can: send the corrected value, "
+        "attach a production reference file, or (for a conflict) choose "
+        "update/ignore — all from the Validation Report panel. Explain "
+        "what is wrong and what to do next in plain language. This file "
+        "already contains many rows, not one record being filled in "
+        "field by field — never propose a step-by-step single-field "
+        "collection flow."
+    )
+
+    return "\n".join(lines)
+
+
+def _report_analysis_chat_reply(
+    request: ConfigurationRequest,
+    task_name: str,
+    user_message: str,
+    history: List[Any],
+) -> Dict[str, Any]:
+
+    validation_errors = _load_json(
+        request.validation_errors,
+        [],
+    )
+
+    if not isinstance(validation_errors, list):
+        validation_errors = []
+
+    state = report_analysis_service.get_analysis_state(request)
+
+    try:
+
+        reply = get_ai_response(
+            task_name=task_name,
+            validation_errors=validation_errors,
+            conversation_history=history,
+            user_message=user_message,
+            rules_content=_report_analysis_context(state),
+            mode="report_analysis",
+        )
+
+    except GroqNetworkError:
+
+        reply = "Please check your network and retry."
+
+    except Exception as exc:
+
+        logger.warning(
+            "Report-analysis chat fell back to a canned summary: %s",
+            exc,
+        )
+
+        reply = report_analysis_service.build_anomaly_summary_message(
+            state
+        )
+
+    history.append(
+        {
+            "sender": "user",
+            "text": user_message,
+            "timestamp": _now(),
+        }
+    )
+
+    history.append(
+        {
+            "sender": "ai",
+            "text": reply,
+            "timestamp": _now(),
+        }
+    )
+
+    request.conversation = json.dumps(
+        history,
+        ensure_ascii=False,
+    )
+
+    resolved = report_analysis_service.all_resolved(
+        request
+    )
+
+    return {
+        "ai_response": reply,
+        "completed": resolved,
+        "ready_for_script": resolved,
+        "validation_errors": validation_errors,
+    }
+
+
 # ============================================================================
 # MAIN CHAT ENDPOINT
 # ============================================================================
@@ -1851,6 +2025,44 @@ async def chat_with_assistant(
     )
 
     # ========================================================================
+    # REPORT ANALYSIS TASKS GET A NORMAL CONVERSATION, NOT THE
+    # FIELD-BY-FIELD WALKTHROUGH BELOW.
+    # ========================================================================
+
+    if _case(task.category) == "report_analyses":
+
+        history = _load_json(
+            request.conversation,
+            [],
+        )
+
+        if not isinstance(history, list):
+            history = []
+
+        result = _report_analysis_chat_reply(
+            request,
+            task_name,
+            chat_request.user_message,
+            history,
+        )
+
+        db.commit()
+
+        return {
+            "request_id": chat_request.request_id,
+            "user_message": chat_request.user_message,
+            "ai_response": result["ai_response"],
+            "user_input_valid": True,
+            "completed": result["completed"],
+            "ready_for_script": result["ready_for_script"],
+            "workflow": {},
+            "validation_errors": result["validation_errors"],
+            "stats": get_validation_stats(
+                result["validation_errors"]
+            ),
+        }
+
+    # ========================================================================
     # LOAD RULES
     # ========================================================================
 
@@ -1861,13 +2073,54 @@ async def chat_with_assistant(
 
     if not rules:
 
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "No validation rules were found "
-                "for this task."
-            ),
+        # This task has no per-field/per-rule engine to walk through (no
+        # rules document, no target-table column rules — e.g. a
+        # report_analyses task created without a target table). Rather
+        # than hard-failing the conversation, answer from what we do
+        # know: the structural column match and any row-level errors
+        # already computed on upload.
+        validation_errors = _load_json(
+            request.validation_errors,
+            [],
         )
+        if not isinstance(validation_errors, list):
+            validation_errors = []
+
+        history = _load_json(request.conversation, [])
+        if not isinstance(history, list):
+            history = []
+
+        if validation_errors:
+            reply = (
+                f"'{task_name}' isn't set up with detailed field-by-field rules, so I can only check it "
+                f"structurally. There {'is' if len(validation_errors) == 1 else 'are'} still "
+                f"{len(validation_errors)} open issue(s) — see the validation report, correct the file, "
+                "and upload it again."
+            )
+        else:
+            reply = (
+                f"'{task_name}' isn't set up with detailed field-by-field rules, so I can only check it "
+                "structurally — and your file's columns already matched with no open issues. "
+                "If something still looks wrong, please flag it to an admin so they can attach validation "
+                "rules to this task."
+            )
+
+        history.append({"sender": "user", "text": chat_request.user_message, "timestamp": _now()})
+        history.append({"sender": "ai", "text": reply, "timestamp": _now()})
+        request.conversation = json.dumps(history, ensure_ascii=False)
+        db.commit()
+
+        return {
+            "request_id": chat_request.request_id,
+            "user_message": chat_request.user_message,
+            "ai_response": reply,
+            "user_input_valid": True,
+            "completed": not validation_errors,
+            "ready_for_script": not validation_errors,
+            "workflow": {},
+            "validation_errors": validation_errors,
+            "stats": get_validation_stats(validation_errors),
+        }
 
     total = len(
         rules
@@ -1920,7 +2173,7 @@ async def chat_with_assistant(
     ):
 
         response = (
-            "✅ **Task completed successfully.**\n\n"
+            "**Task completed successfully.**\n\n"
             "All configuration rules have been "
             "validated successfully.\n\n"
             "The task is ready for final "
@@ -1980,7 +2233,7 @@ async def chat_with_assistant(
         db.commit()
 
         response = (
-            "✅ All configuration rules "
+            "All configuration rules "
             "have been completed successfully."
         )
 
@@ -2011,34 +2264,95 @@ async def chat_with_assistant(
     )
 
     # ========================================================================
-    # HAS USER ALREADY ANSWERED THIS RULE?
+    # HAS THE USER ALREADY SEEN THIS RULE'S INTRO?
+    #
+    # Separate from whether they've answered it: rule_results only ever
+    # gains an entry for current_index right before current_index itself
+    # advances past it, so "has this been answered" is always False for
+    # whatever the current rule is. Tracking the intro separately is what
+    # lets a wrong (or off-topic) reply actually reach real validation
+    # below instead of re-showing the same intro forever.
     # ========================================================================
 
-    rule_results = workflow.get(
-        "rule_results",
+    introduced_steps = workflow.get(
+        "introduced_steps",
         [],
     )
 
     if not isinstance(
-        rule_results,
+        introduced_steps,
         list,
     ):
 
-        rule_results = []
+        introduced_steps = []
 
-    current_rule_answered = any(
-        isinstance(item, dict)
-        and item.get(
-            "step_index"
-        ) == current_index
-        for item in rule_results
-    )
+    current_rule_introduced = current_index in introduced_steps
 
     # ========================================================================
     # FIRST DISPLAY OF RULE
     # ========================================================================
 
-    if not current_rule_answered:
+    if not current_rule_introduced:
+
+        incoming_message = _text(
+            chat_request.user_message
+        )
+
+        # The user asked something instead of attempting a value for
+        # this rule (e.g. "help during the process") — answer what
+        # they actually asked instead of silently discarding it and
+        # replaying the same step introduction, which reads as if the
+        # assistant ignored them.
+        if incoming_message and input_intent.is_question(
+            incoming_message
+        ):
+
+            answer = _answer_rule_question(
+                task_name,
+                current_rule,
+                incoming_message,
+                history,
+            )
+
+            history.append(
+                {
+                    "sender": "user",
+                    "text": incoming_message,
+                    "timestamp": _now(),
+                }
+            )
+
+            history.append(
+                {
+                    "sender": "ai",
+                    "text": answer,
+                    "timestamp": _now(),
+                }
+            )
+
+            request.conversation = json.dumps(
+                history,
+                ensure_ascii=False,
+            )
+
+            db.commit()
+
+            return {
+                "request_id": chat_request.request_id,
+                "user_message": chat_request.user_message,
+                "ai_response": answer,
+                "user_input_valid": None,
+                "completed": False,
+                "ready_for_script": False,
+                "workflow": workflow,
+                "current_rule": _rule_payload(
+                    current_rule
+                ),
+                "validation_errors": validation_errors,
+                "stats": get_validation_stats(
+                    validation_errors
+                ),
+            }
 
         generated = _generate_example(
             current_rule,
@@ -2067,6 +2381,9 @@ async def chat_with_assistant(
         workflow[
             "started"
         ] = True
+
+        introduced_steps.append(current_index)
+        workflow["introduced_steps"] = introduced_steps
 
         _save_workflow(
             history,
@@ -2114,6 +2431,58 @@ async def chat_with_assistant(
     user_value = _text(
         chat_request.user_message
     )
+
+    # A question about this rule, not an attempt at it — answer it and
+    # ask again next turn, rather than running it through the validator
+    # (which would just reject it as a bad value).
+    if user_value and input_intent.is_question(user_value):
+
+        answer = _answer_rule_question(
+            task_name,
+            current_rule,
+            user_value,
+            history,
+        )
+
+        history.append(
+            {
+                "sender": "user",
+                "text": user_value,
+                "timestamp": _now(),
+            }
+        )
+
+        history.append(
+            {
+                "sender": "ai",
+                "text": answer,
+                "timestamp": _now(),
+            }
+        )
+
+        request.conversation = json.dumps(
+            history,
+            ensure_ascii=False,
+        )
+
+        db.commit()
+
+        return {
+            "request_id": chat_request.request_id,
+            "user_message": chat_request.user_message,
+            "ai_response": answer,
+            "user_input_valid": None,
+            "completed": False,
+            "ready_for_script": False,
+            "workflow": workflow,
+            "current_rule": _rule_payload(
+                current_rule
+            ),
+            "validation_errors": validation_errors,
+            "stats": get_validation_stats(
+                validation_errors
+            ),
+        }
 
     previous_values = (
         _previous_user_values(
@@ -2182,7 +2551,7 @@ async def chat_with_assistant(
         ]
 
         response = (
-            f"❌ **The value does not satisfy "
+            f"**The value does not satisfy "
             f"this rule.**\n\n"
             f"**Rule:** "
             f"{current_rule.get('name', 'Rule')}\n\n"
@@ -2350,8 +2719,8 @@ async def chat_with_assistant(
         ] = True
 
         response = (
-            "✅ **Rule completed successfully.**\n\n"
-            "🎉 All configuration rules have "
+            "**Rule completed successfully.**\n\n"
+            "All configuration rules have "
             "now been completed successfully.\n\n"
             "The task is ready for final "
             "configuration script generation."
@@ -2379,6 +2748,13 @@ async def chat_with_assistant(
             next_index + 1
         )
 
+        # The success message below already spells out the next rule's
+        # own intro inline — mark it introduced so the next turn goes
+        # straight to validating an answer instead of repeating it.
+        if next_index not in introduced_steps:
+            introduced_steps.append(next_index)
+        workflow["introduced_steps"] = introduced_steps
+
         generated = _generate_example(
             next_rule,
             task_name,
@@ -2393,7 +2769,7 @@ async def chat_with_assistant(
         )
 
         response = (
-            "✅ **Rule completed successfully.**\n\n"
+            "**Rule completed successfully.**\n\n"
             f"Now proceed to: "
             f"**{next_rule.get('name', 'Rule')}**\n\n"
             f"### Step {next_step}/{total}: "

@@ -46,12 +46,21 @@ _QUESTION_OPENERS = (
     "give me", "show me", "any idea", "not sure", "no idea",
 )
 
-# Words that mean the question is about filling in this step.
+# Words that mean the question is about filling in this step. Kept
+# broad on purpose: mid-task there is nothing else for the user to be
+# asking about, so a false "this is about the step" costs nothing (the
+# rule-scoped follow-up just answers it), while a false "this is
+# unrelated" wrongly refuses a real question with "outside what I can
+# help with" — the far more visible failure.
 _STEP_HELP_WORDS = {
     "format", "example", "mean", "means", "meaning", "enter", "input",
     "value", "supposed", "expect", "expected", "required", "require",
     "here", "this", "step", "field", "put", "type", "write", "fill",
-    "provide", "accept", "accepted", "valid", "wrong", "help",
+    "provide", "accept", "accepted", "valid", "wrong", "help", "explain",
+    "should", "upload", "uploading", "attach", "attaching", "attachment",
+    "send", "sending", "submit", "submitting", "necessary", "mandatory",
+    "optional", "correct", "include", "add", "need", "needed", "ok",
+    "okay", "fine", "way", "how",
 }
 
 _CHITCHAT_PATTERNS = (
@@ -60,6 +69,15 @@ _CHITCHAT_PATTERNS = (
     r"^(bye|goodbye|see\s+you|later)\b",
     r"^(who\s+are\s+you|what\s+are\s+you)\b",
     r"^(test|testing)\W*$",
+    # An announcement that a question is coming, with no content yet
+    # ("have a question", "quick question") — not itself an attempted
+    # value, and not answerable as a step/other question since it
+    # doesn't say what it's about. A warm "go ahead" invites the real
+    # question next turn instead of the input being silently run
+    # through validation or flatly refused.
+    r"^(i\s+)?(have|got|had)\s+a\s+question\W*$",
+    r"^(a\s+)?(quick|one|another|small)\s+question\W*$",
+    r"^(can|may|could)\s+i\s+ask\s+(you\s+)?(a\s+question|something)?\W*$",
 )
 
 
@@ -138,6 +156,18 @@ def _looks_unintelligible(text: str, step: dict | None = None) -> bool:
     return False
 
 
+# A question announced without a "?" and with actual content attached
+# ("I have a question about the format", "quick question regarding
+# this") — the bare-announcement case with no content is caught by
+# _CHITCHAT_PATTERNS instead, before this ever runs.
+_QUESTION_PHRASE_PATTERNS = (
+    r"\b(i'?ve|i\s+have|i\s+got|i\s+had)\s+a\s+question\b",
+    r"\b(a\s+)?(quick|one|another|small)\s+question\b",
+    r"\bcan\s+i\s+ask\b",
+    r"\bmind\s+if\s+i\s+ask\b",
+)
+
+
 def _is_question(text: str) -> bool:
     lowered = text.strip().lower()
 
@@ -147,10 +177,32 @@ def _is_question(text: str) -> bool:
     if lowered.endswith("?"):
         return True
 
-    return any(
+    if any(
         lowered.startswith(opener)
         for opener in _QUESTION_OPENERS
+    ):
+        return True
+
+    return any(
+        re.search(pattern, lowered)
+        for pattern in _QUESTION_PHRASE_PATTERNS
     )
+
+
+def is_question(text: str) -> bool:
+    """
+    Whether a piece of text reads as a question rather than an
+    attempted answer.
+
+    Unlike classify(), this carries no precondition that the input
+    already failed validation — it is meant for spots where the
+    walkthrough is parked waiting for something specific (a yes/no,
+    one field of a table, an advance confirmation) and needs to tell
+    "explain this" apart from a genuine attempt at what was asked for,
+    before that attempt is ever judged.
+    """
+
+    return _is_question(text)
 
 
 def _mentions_step(text: str, step: dict) -> bool:
