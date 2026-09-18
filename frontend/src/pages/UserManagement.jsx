@@ -72,6 +72,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 // dashboard, so a glance is enough to tell which kind of tag it is.
 const TAG_META = {
   admin: { color: '#4f46e5', bg: 'rgba(79,70,229,0.12)' },
+  specialist: { color: '#0ea5e9', bg: 'rgba(14,165,233,0.12)' },
   data_export: { color: '#0d9488', bg: 'rgba(13,148,136,0.12)' },
   data_import: { color: '#7c3aed', bg: 'rgba(124,58,237,0.12)' },
 }
@@ -111,12 +112,14 @@ const UserManagement = ({ searchTerm: topbarSearch = '' } = {}) => {
 
   const ROLE_OPTIONS = [
     { value: 'admin', label: t('userManagement.roleAdmin') },
+    { value: 'specialist', label: t('userManagement.roleSpecialist') },
     { value: 'member', label: t('userManagement.roleMember') },
   ]
 
   const displayTags = (targetUser) => {
     const tags = []
     if (targetUser.role === 'admin') tags.push({ key: 'admin', label: t('userManagement.roleAdmin') })
+    if (targetUser.role === 'specialist') tags.push({ key: 'specialist', label: t('userManagement.roleSpecialist') })
     for (const opt of ACCESS_OPTIONS) {
       if ((targetUser.access || []).includes(opt.value)) tags.push({ key: opt.value, label: opt.label })
     }

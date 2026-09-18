@@ -6142,6 +6142,7 @@ def get_ai_response(
     ] = None,
     mode: str = "validation",
     language: str = "en",
+    file_content: str = "",
 ) -> str:
     """
     General BRAINOPX assistant.
@@ -6156,6 +6157,15 @@ MODE:
 
 USER MESSAGE:
 {user_message}
+"""
+
+    if file_content:
+
+        context += f"""
+
+UPLOADED FILE CONTENT (reason about these actual cell values when the
+user asks about their file or data):
+{file_content[:8000]}
 """
 
     if rules_content:
@@ -6316,12 +6326,17 @@ Escalating to a human expert:
 
 FRIENDLY_TONE_GUIDELINES = """
 Tone and conversational style:
-- Be warm, natural, and concise — a sentence or two, not a wall of text.
+- Be warm, natural, and short. Reply in one to three short sentences by
+  default, like a quick live-chat answer — never a wall of text.
+- Answer only the single thing that was asked. Do not volunteer a full
+  report, summary, or list unless the user explicitly asked for one.
 - Mirror greetings and small talk briefly and naturally (a short "Hey!
   ... how about you?"), then offer a next step.
 - Admit when you don't know something or don't have access to it, instead
   of guessing or inventing an answer.
 - When a request is vague, ask one clarifying question before diving in.
+- When the user must choose between options, keep it to one short line
+  plus the options — do not add a long explanation around them.
 - Prefer plain language over jargon.
 - When you have to decline something, offer the nearest thing you can
   actually help with instead of a flat refusal.
@@ -6360,6 +6375,14 @@ Formatting:
   no sub-bullets underneath — the interface renders this exact pattern
   as illustrated step cards, and a step missing the bold title or the
   dash falls back to a plain numbered line instead.
+- When you need the user to make a choice between a small set of options
+  (a yes/no, a category, a mode, or a few distinct courses of action),
+  do not fold the choices into a prose sentence. Put a short heading on
+  its own line first (such as '## Choose one' or '## Options'), then a
+  numbered list where every item is exactly '1. **Short Option Label** —
+  one concise sentence describing that choice.' The interface renders
+  this pattern as one selectable-looking card per option, so the user can
+  see each choice as its own block.
 - Lead with the direct answer or the single most important fact, then
   break out supporting detail (what's wrong, why, what to do next) into
   its own clearly labeled section rather than folding everything into
@@ -6407,6 +6430,10 @@ Rules:
 - Do not generate SQL and do not decide whether a user's data is valid —
   deterministic validation elsewhere in BRAINOPX is authoritative for that.
 - Be concise, clear, and helpful.
+- Keep everyday replies to one to three short sentences, like a live-chat
+  reply. Only produce a structured answer (headings, tables, or lists)
+  when the user explicitly asks for a report, summary, analysis,
+  comparison, or step-by-step guide.
 """ + FRIENDLY_TONE_GUIDELINES + RESPONSE_FORMATTING_GUIDELINES + """
 
 Staying on topic:
@@ -6473,6 +6500,204 @@ def get_assistant_chat_response(
         user_prompt=context,
         temperature=0.4,
         max_tokens=1400,
+        reasoning_effort="medium",
+    )
+
+
+# ============================================================
+# TASK DEFINITION ASSISTANT (uploaded file matches no template)
+#
+# When a user uploads an Excel/CSV file and no active ConfigurationTask
+# template matches its columns, the request is still opened (with a NULL
+# task_id) and this assistant takes over the conversation: it asks the
+# user for the information needed to define the missing task, and — when
+# the user asks for an expert — returns both an in-app escalation and
+# specialist guidance for defining the task precisely.
+# ============================================================
+
+TASK_DEFINITION_SYSTEM_PROMPT = (
+    "You are the BRAINOPX task-definition assistant. A user has uploaded "
+    "a spreadsheet, but no task template exists in BRAINOPX for it yet. "
+    "Your job is to work out, with the user, what that missing task "
+    "should be.\n"
+    "\n"
+    "What you are given: the uploaded file's name and its column headers "
+    "(under UPLOADED FILE below), plus the conversation so far.\n"
+    "\n"
+    "How to behave:\n"
+    "- Ask one focused clarifying question at a time, starting with the "
+    "most important unknown (usually: what is this file for / what "
+    "business task does it represent).\n"
+    "- When the question is a choice between options, put a short "
+    "'## Choose one' heading on its own line, then a numbered list where "
+    "every item is exactly '1. **Short Option Label** — one concise "
+    "sentence describing that choice.' Do not bury the choices in a "
+    "prose sentence.\n"
+    "- Work toward capturing: a short task name, a one-line description, "
+    "a category (report_analyses for spreadsheet validation tasks, or "
+    "skill_engine for rule-driven tasks), which columns matter, and any "
+    "validation rules or constraints the data must respect.\n"
+    "- When the user has given enough to describe the task, summarize it "
+    "as a proposed task definition (name, description, category, key "
+    "columns, rules) and tell them an expert will be notified to create "
+    "it — do not claim you can create it yourself.\n"
+    "- If the user asks to talk to an expert, a human, or asks for help "
+    "you cannot give, say so in one sentence and stop there — the "
+    "escalation itself is handled by the system, not by you.\n"
+    "\n"
+    "Rules:\n"
+    "- Use ONLY the uploaded file's columns and what the user tells you. "
+    "Never invent column meanings, business rules, or system behavior.\n"
+    "- Do not generate SQL and do not validate the user's data.\n"
+    "- Keep replies short and warm; one question at a time.\n"
+) + FRIENDLY_TONE_GUIDELINES + RESPONSE_FORMATTING_GUIDELINES
+
+
+TASK_DEFINITION_EXPERT_SYSTEM_PROMPT = (
+    "You are a BRAINOPX configuration-task specialist. Given the column "
+    "headers of a spreadsheet whose task template does not exist yet, "
+    "produce precise, structured guidance for the administrator who will "
+    "create it.\n"
+    "\n"
+    "Structure your reply in exactly this order, and keep every section "
+    "short:\n"
+    "\n"
+    "1. A two-to-three sentence summary of what the file appears to be "
+    "and what the task should do.\n"
+    "\n"
+    "2. A '## Choose one' decision block ONLY when the file's purpose is "
+    "genuinely ambiguous (for example validation vs analysis). Give two "
+    "or three choices as a numbered list, every item exactly "
+    "'1. **Short Option Label** — one concise sentence describing that "
+    "choice.' Otherwise skip this block entirely.\n"
+    "\n"
+    "3. A '## Proposed Task Template' section containing:\n"
+    "- **Task name** and a one-line **Description**.\n"
+    "- **Category** (report_analyses for spreadsheet validation, "
+    "skill_engine for rule-driven tasks) with a one-line reason.\n"
+    "- **Column Rules** as a markdown pipe table with columns: "
+    "| Column | Apparent Type | Suggested Validation |.\n"
+    "- **Cross-Column Relationships** as a bulleted list, each clearly "
+    "marked as a suggestion to confirm, not a fact.\n"
+    "- **Open Questions** as a bulleted list of the three to five things "
+    "only sample data can confirm.\n"
+    "\n"
+    "4. A final '## Choose next step' decision block: a numbered list of "
+    "exactly two items in the '**Label** — description' shape:\n"
+    "1. **Refine the rules** — share sample rows or allowed values so the "
+    "template can be tightened.\n"
+    "2. **Approve as-is** — send it to the administrator to create the "
+    "task.\n"
+    "\n"
+    "Only infer from column names and standard spreadsheet conventions; "
+    "never invent data or state a guess as a certainty.\n"
+) + FRIENDLY_TONE_GUIDELINES + RESPONSE_FORMATTING_GUIDELINES
+
+
+def build_no_template_welcome_message(
+    uploaded_columns: list,
+    filename: str = "",
+    language: str = "en",
+) -> str:
+    """
+    The assistant's opening message when an uploaded file matches no task
+    template. Deterministic — no network call at upload time — so the
+    user always gets a clear next step even if the AI is unavailable.
+    """
+
+    file_label = f"**{filename}**" if filename else "your file"
+
+    column_text = ", ".join(uploaded_columns) or "(no header row found)"
+
+    body = (
+        f"No task template matches {file_label} yet.\n"
+        f"Columns: {column_text}.\n\n"
+        "What does this file represent?"
+    )
+
+    if language == "fr":
+        return (
+            "Aucun modèle de tâche ne correspond à votre fichier. "
+            "Que représente ce fichier ?"
+        )
+
+    return body
+
+
+def get_task_definition_chat_response(
+    user_message: str,
+    conversation_history: list,
+    uploaded_columns: list,
+    filename: str = "",
+    language: str = "en",
+    file_content: str = "",
+) -> str:
+    """
+    One conversational turn of the task-definition assistant, for a
+    configuration request whose task template does not exist yet.
+    conversation_history is [{"sender": "user"|"ai", "text": str}].
+    """
+
+    columns_text = "\n".join(uploaded_columns) or "(no header row found)"
+
+    context = (
+        f"UPLOADED FILE:\n{filename or '(unnamed)'}\n"
+        f"COLUMN HEADERS:\n{columns_text}\n\n"
+    )
+
+    if file_content:
+        context += f"FILE CONTENT PREVIEW:\n{file_content[:8000]}\n\n"
+
+    parts = []
+    for msg in conversation_history[-10:]:
+        sender = msg.get("sender")
+        text = str(msg.get("text", "")).strip()
+        if text and sender in ("user", "ai"):
+            label = "USER" if sender == "user" else "ASSISTANT"
+            parts.append(f"{label}: {text}")
+
+    if parts:
+        context += "RECENT CONVERSATION:\n" + "\n".join(parts) + "\n\n"
+
+    context += f"USER MESSAGE:\n{user_message}"
+
+    return _call_groq(
+        system_prompt=TASK_DEFINITION_SYSTEM_PROMPT + _language_suffix(language),
+        user_prompt=context,
+        temperature=0.4,
+        max_tokens=1400,
+        reasoning_effort="medium",
+    )
+
+
+def get_task_definition_expert_guidance(
+    uploaded_columns: list,
+    filename: str = "",
+    language: str = "en",
+    file_content: str = "",
+) -> str:
+    """
+    Specialist guidance for defining the missing task, produced by a
+    task-design expert persona. Used when the user asks to escalate, so
+    the expert notification carries an actionable proposal rather than
+    just the raw column list.
+    """
+
+    columns_text = "\n".join(uploaded_columns) or "(no header row found)"
+
+    prompt = (
+        f"UPLOADED FILE:\n{filename or '(unnamed)'}\n"
+        f"COLUMN HEADERS:\n{columns_text}"
+    )
+
+    if file_content:
+        prompt += f"\n\nFILE CONTENT PREVIEW:\n{file_content[:8000]}"
+
+    return _call_groq(
+        system_prompt=TASK_DEFINITION_EXPERT_SYSTEM_PROMPT + _language_suffix(language),
+        user_prompt=prompt,
+        temperature=0.3,
+        max_tokens=2200,
         reasoning_effort="medium",
     )
 

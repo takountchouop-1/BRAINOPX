@@ -424,6 +424,7 @@
     "accessDataImport": "Data import",
     "roleAdmin": "Admin",
     "roleMember": "Member",
+    "roleSpecialist": "Specialist",
     "errorAdminOnly": "Only administrators can view the user list.",
     "errorLoadUsersStatus": "Could not load users ({{status}}).",
     "errorLoadUsersDefault": "Could not load users.",
@@ -496,5 +497,37 @@
     "credentialsShownOnce": "This password is shown only once.",
     "copy": "Copy password",
     "done": "Done"
+  },
+  "support": {
+    "title": "Support",
+    "subtitle": "Talk to a BRAINOPX specialist and track your requests.",
+    "newRequest": "New request",
+    "noRequestsTitle": "No support requests yet",
+    "noRequestsBody": "Open a request when you need help from a specialist.",
+    "selectRequest": "Select a request to view the conversation.",
+    "resolved": "Resolved",
+    "resolvedReplyHint": "This request is resolved — send a message to reopen it.",
+    "replyPlaceholder": "Write a reply…",
+    "newRequestTitle": "New support request",
+    "subjectLabel": "Subject",
+    "messageLabel": "Message",
+    "messagePlaceholder": "Describe what you need help with…",
+    "cancel": "Cancel",
+    "send": "Send",
+    "sending": "Sending…"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "subtitle": "Your messages and activity, all in one place.",
+    "markAllRead": "Mark all as read",
+    "noNotifications": "No notifications yet",
+    "unread": "New",
+    "justNow": "Just now",
+    "minutesAgo_one": "{{count}} minute ago",
+    "minutesAgo_other": "{{count}} minutes ago",
+    "hoursAgo_one": "{{count}} hour ago",
+    "hoursAgo_other": "{{count}} hours ago",
+    "daysAgo_one": "{{count}} day ago",
+    "daysAgo_other": "{{count}} days ago"
   }
 }

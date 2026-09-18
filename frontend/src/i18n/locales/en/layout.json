@@ -13,6 +13,9 @@
       "generalAssistant": "General Assistant",
       "userManagement": "User Management",
       "ruleEngine": "Rule Engine",
+      "support": "Support",
+      "notifications": "Notifications",
+      "specialistPortal": "Specialist Portal",
       "profile": "Profile"
     },
     "brand": {

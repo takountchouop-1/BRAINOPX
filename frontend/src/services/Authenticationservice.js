@@ -35,6 +35,32 @@ export async function login({ email, password }) {
   return data
 }
 
+export async function adminLogin({ email, password }) {
+  const response = await fetch(`${API_BASE_URL}/api/auth/admin-login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ email, password }),
+    credentials: 'include',
+  })
+
+  return handleResponse(response)
+}
+
+export async function userLogin({ email, password }) {
+  const response = await fetch(`${API_BASE_URL}/api/auth/user-login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ email, password }),
+    credentials: 'include',
+  })
+
+  return handleResponse(response)
+}
+
 export async function requestPasswordReset({ email }) {
   const response = await fetch(`${API_BASE_URL}/api/auth/request-password-reset`, {
     method: 'POST',

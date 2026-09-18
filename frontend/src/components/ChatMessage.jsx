@@ -57,7 +57,7 @@ export const USER_BG = '#4f46e5'
 export const USER_TEXT = '#ffffff'
 
 export const ASSISTANT_BG = (theme) =>
-  theme.palette.mode === 'dark' ? '#2b2b2e' : '#ffffff'
+  theme.palette.mode === 'dark' ? '#2b2b2e' : '#f4f6fb'
 
 export const ASSISTANT_TEXT = (theme) =>
   theme.palette.mode === 'dark' ? '#ececee' : '#1f2937'
@@ -378,6 +378,16 @@ const useTypewriterReveal = (content, enabled, isHtml) => {
   return { revealedLength, totalLength }
 }
 
+// Guided-flow messages arrive as real HTML (spans/tables carrying class
+// names) and must be injected as-is. Conversational AI replies arrive as
+// markdown-lite text (**bold**, lists, headings), so callers use this to
+// route markdown to the parser — which bolds **word** instead of showing
+// literal asterisks — while leaving real HTML on the innerHTML path.
+const GUIDED_HTML_TAG_RE = /<\s*(span|table|caption|thead|tbody|tr|th|td|div|br|p|h[1-6]|ul|ol|li|a|strong|b|em|i)\b[^>]*>/i
+
+export const looksLikeGuidedHtml = (text) =>
+  GUIDED_HTML_TAG_RE.test(String(text || ''))
+
 // ─── LIGHTWEIGHT MARKDOWN ────────────────────────────────────────────────────
 // The assistant's replies come back as plain text with **bold**, numbered
 // (1. 2. 3.) and bulleted (- or •) lines rather than real markup. Rendered
@@ -466,10 +476,20 @@ const asStepItems = (items) => {
   return parsed.map((match) => ({ title: match[1].trim(), description: match[2].trim() }))
 }
 
+// A heading that introduces a choice the user must make — the ordered
+// list directly under it is rendered as selectable-looking option cards
+// rather than a step guide.
+const OPTION_HEADING_RE = /choose|select|option|pick|which|one of|would you like|want me to|prefer/i
+
 const parseAssistantBlocks = (text) => {
   const lines = String(text || '').split('\n').map((l) => l.trim())
   const blocks = []
   let currentList = null
+  // The most recent heading, remembered so an ordered list that follows
+  // a "choose/select/option" heading can be rendered as option cards
+  // instead of a step guide. Cleared by any blank line, table, paragraph
+  // or bulleted list that interrupts it.
+  let pendingHeading = null
 
   const flushList = () => {
     if (currentList) {
@@ -484,6 +504,7 @@ const parseAssistantBlocks = (text) => {
 
     if (!line) {
       flushList()
+      pendingHeading = null
       i += 1
       continue
     }
@@ -491,6 +512,7 @@ const parseAssistantBlocks = (text) => {
     // A table: a row, then a "---" separator row, then zero or more rows.
     if (isTableRow(line) && isTableSeparatorRow(lines[i + 1] || '')) {
       flushList()
+      pendingHeading = null
       const headers = splitTableRow(line)
       const rows = []
       i += 2
@@ -505,7 +527,9 @@ const parseAssistantBlocks = (text) => {
     const heading = line.match(/^(#{1,3})\s+(.*)$/)
     if (heading) {
       flushList()
-      blocks.push({ type: `h${heading[1].length}`, text: heading[2].trim() })
+      const headingText = heading[2].trim()
+      blocks.push({ type: `h${heading[1].length}`, text: headingText })
+      pendingHeading = headingText
       i += 1
       continue
     }
@@ -516,7 +540,8 @@ const parseAssistantBlocks = (text) => {
     if (numbered) {
       if (!currentList || currentList.type !== 'ol') {
         flushList()
-        currentList = { type: 'ol', items: [] }
+        currentList = { type: 'ol', items: [], heading: pendingHeading }
+        pendingHeading = null
       }
       currentList.items.push(numbered[1])
       i += 1
@@ -526,6 +551,7 @@ const parseAssistantBlocks = (text) => {
     if (bulleted) {
       if (!currentList || currentList.type !== 'ul') {
         flushList()
+        pendingHeading = null
         currentList = { type: 'ul', items: [] }
       }
       currentList.items.push(bulleted[1])
@@ -534,6 +560,7 @@ const parseAssistantBlocks = (text) => {
     }
 
     flushList()
+    pendingHeading = null
     blocks.push({ type: 'p', text: line })
     i += 1
   }
@@ -739,6 +766,75 @@ const StepGuideList = ({ steps }) => (
   </Box>
 )
 
+/**
+ * One choice the assistant is asking the user to make, rendered as its
+ * own raised card so each option reads as a distinct, selectable block
+ * instead of a line of prose.
+ */
+const OptionCard = ({ number, title, description }) => (
+  <Box
+    sx={{
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 1.25,
+      p: 1.5,
+      borderRadius: 2,
+      border: (theme) =>
+        `1px solid ${theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.10)'}`,
+      bgcolor: (theme) =>
+        theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : '#ffffff',
+      transition: 'border-color 140ms ease, box-shadow 140ms ease',
+      '&:hover': {
+        borderColor: 'rgba(79,70,229,0.6)',
+        boxShadow: (theme) =>
+          theme.palette.mode === 'dark'
+            ? '0 6px 18px rgba(0,0,0,0.35)'
+            : '0 6px 18px rgba(79,70,229,0.12)',
+      },
+    }}
+  >
+    <Box
+      sx={{
+        width: 26,
+        height: 26,
+        borderRadius: '50%',
+        flexShrink: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        bgcolor: '#4f46e5',
+        color: '#fff',
+        fontSize: 13,
+        fontWeight: 800,
+        mt: 0.25,
+      }}
+    >
+      {number}
+    </Box>
+    <Box sx={{ minWidth: 0 }}>
+      <Typography sx={{ fontSize: 14.5, fontWeight: 700, mb: 0.25 }}>{title}</Typography>
+      {description && (
+        <Typography sx={{ fontSize: 13.5, lineHeight: 1.5, opacity: 0.78 }}>
+          {description}
+        </Typography>
+      )}
+    </Box>
+  </Box>
+)
+
+const OptionCardList = ({ options }) => (
+  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 1, '&:last-child': { mb: 0 } }}>
+    {options.map((option, i) => (
+      <OptionCard
+        key={i}
+        number={i + 1}
+        title={option.title}
+        description={option.description}
+      />
+    ))}
+  </Box>
+)
+
 // Structured reports the assistant produces use '#'/'##'/'###' headings —
 // rendered with real heading typography instead of literal '#' characters.
 const HEADING_STYLES = {
@@ -787,7 +883,12 @@ const AssistantRichText = ({ text }) => {
 
         if (block.type === 'ol') {
           const steps = asStepItems(block.items)
-          if (steps) return <StepGuideList key={i} steps={steps} />
+          if (steps) {
+            if (block.heading && OPTION_HEADING_RE.test(block.heading)) {
+              return <OptionCardList key={i} options={steps} />
+            }
+            return <StepGuideList key={i} steps={steps} />
+          }
         }
 
         const ListTag = block.type === 'ol' ? 'ol' : 'ul'
@@ -851,8 +952,8 @@ const ChatMessage = ({
     wordBreak: 'break-word',
   }
 
-  // The person's bubble carries the indigo fill; the assistant's is the
-  // plain white/dark card. Person on the right, assistant on the left.
+  // The person's bubble carries the indigo fill; the assistant writes
+  // directly on the chat surface. Person on the right, assistant on the left.
   const bubble = isUser
     ? {
         ...bubbleBase,
@@ -879,21 +980,12 @@ const ChatMessage = ({
       }
     : {
         ...bubbleBase,
-        // The assistant carries the step, the example and often a
-        // table, so it is given more room than a typed reply.
-        px: 2,
-        py: 1.4,
-        bgcolor: ASSISTANT_BG,
+        // No card, border, or fill — the assistant's text sits directly
+        // on the conversation surface like a plain transcript entry.
+        px: 0,
+        py: 0,
+        bgcolor: 'transparent',
         color: ASSISTANT_TEXT,
-        borderRadius: '20px 20px 20px 6px',
-        border: (theme) =>
-          theme.palette.mode === 'dark'
-            ? '1.5px solid rgba(255,255,255,0.10)'
-            : '1.5px solid rgba(79,70,229,0.22)',
-        boxShadow: (theme) =>
-          theme.palette.mode === 'dark'
-            ? '0 8px 24px rgba(0,0,0,0.36), 0 1px 2px rgba(0,0,0,0.24)'
-            : '0 8px 24px rgba(79,70,229,0.10), 0 2px 6px rgba(16,24,40,0.05)',
       }
 
   return (
@@ -904,6 +996,11 @@ const ChatMessage = ({
         gap: 1,
         flexDirection: isUser ? 'row-reverse' : 'row',
         alignSelf: isUser ? 'flex-end' : 'flex-start',
+        // Push the row to its side of the conversation even when the
+        // message is wrapped in a plain (non-flex) block, which is how
+        // some pages render each entry.
+        ml: isUser ? 'auto' : 0,
+        mr: isUser ? 0 : 'auto',
         // The bubble hugs its own content — a short reply stays short —
         // but is capped so a long paragraph or a table still wraps
         // instead of running edge to edge.

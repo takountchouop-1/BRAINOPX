@@ -3,14 +3,18 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
-from app.db.models import ConfigurationRequest, ConfigurationTask
+from app.db.models import ConfigurationRequest, ConfigurationTask, SupportMessage, SupportTicket, User
 from app.services.groq_service import (
     parse_rules_to_json,
     generate_rule_example_with_retry,
     run_rule_followup,
     get_ai_response,
+    get_task_definition_chat_response,
+    get_task_definition_expert_guidance,
     GroqNetworkError,
 )
+from app.services.excel_service import extract_column_headers, read_file_preview
+from app.services.notification_service import create_notification
 from app.services.validation_service import get_validation_stats
 from app.services import input_intent
 from app.services import report_analysis_service
@@ -1889,6 +1893,22 @@ def _report_analysis_context(state: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _uploaded_file_preview(request: ConfigurationRequest) -> str:
+    """
+    A compact text preview of the file the user uploaded for this request,
+    so the assistant can reason about actual cell values rather than only
+    column headers and validation errors.
+    """
+    if not request.uploaded_file_path:
+        return ""
+
+    try:
+        return read_file_preview(request.uploaded_file_path)
+    except Exception as exc:
+        logger.warning("Could not preview uploaded file: %s", exc)
+        return ""
+
+
 def _report_analysis_chat_reply(
     request: ConfigurationRequest,
     task_name: str,
@@ -1915,6 +1935,7 @@ def _report_analysis_chat_reply(
             user_message=user_message,
             rules_content=_report_analysis_context(state),
             mode="report_analysis",
+            file_content=_uploaded_file_preview(request),
         )
 
     except GroqNetworkError:
@@ -1966,6 +1987,294 @@ def _report_analysis_chat_reply(
 
 
 # ============================================================================
+# NO-TEMPLATE CHAT (uploaded file matches no task template)
+# ============================================================================
+
+_ESCALATE_WORDS = {
+    "expert",
+    "experts",
+    "escalate",
+    "escalation",
+    "specialist",
+    "human",
+    "person",
+    "someone",
+    "help",
+    "support",
+}
+
+
+def _wants_expert(value: str) -> bool:
+    """Whether the user's message is asking to hand off to an expert."""
+
+    lowered = value.strip().lower().rstrip(".").rstrip("!")
+
+    if lowered in _ESCALATE_WORDS:
+        return True
+
+    # Any strong handoff keyword, even inside a longer sentence —
+    # "waiting for the specialist", "I need an expert", "please escalate".
+    # Word boundaries keep "expertise" or "humanity" from matching.
+    if re.search(
+        r"\b(expert|experts|specialist|specialists|human|escalate|escalation)\b",
+        lowered,
+    ):
+        return True
+
+    # "I want to talk to a human", "get me an expert", etc.
+    for phrase in (
+        "talk to",
+        "speak to",
+        "contact",
+        "call an expert",
+        "get an expert",
+        "get me an expert",
+        "an expert",
+        "a human",
+        "a person",
+        "need help",
+        "need support",
+    ):
+        if phrase in lowered:
+            return True
+
+    return False
+
+
+def _notify_experts(
+    db: Session,
+    request: ConfigurationRequest,
+    uploaded_columns: List[str],
+) -> int:
+    """
+    Open a support ticket for this request and notify every active
+    specialist (and administrator, who can also work the specialist
+    inbox) so one of them can pick it up. Returns how many people
+    were notified.
+    """
+
+    experts = (
+        db.query(User)
+        .filter(
+            User.role.in_(["admin", "specialist"]),
+            User.is_active == True,
+        )
+        .all()
+    )
+
+    column_preview = ", ".join(uploaded_columns[:12]) or "(no header row)"
+    if len(uploaded_columns) > 12:
+        column_preview += ", ..."
+
+    # The ticket is the specialist's thread; its first message records
+    # what the user uploaded, so a specialist can read the context
+    # without opening the request itself.
+    ticket = SupportTicket(
+        user_id=request.user_id,
+        request_id=request.id,
+        subject=(
+            f"Task template requested: "
+            f"{request.uploaded_filename or 'new file'}"
+        ),
+        status="open",
+    )
+    db.add(ticket)
+    db.flush()
+
+    db.add(SupportMessage(
+        ticket_id=ticket.id,
+        sender_id=request.user_id,
+        sender_role="user",
+        body=(
+            f"User uploaded '{request.uploaded_filename or 'a file'}' and no "
+            f"task template matches it. Detected columns: {column_preview}."
+        ),
+        read_by_user=True,
+        read_by_specialist=False,
+    ))
+
+    # Replay the AI assistant conversation that happened before the
+    # handoff, so the specialist can follow everything the user and the
+    # assistant said from the beginning. User turns stay "user" turns;
+    # assistant turns are kept distinct so the specialist UI can label
+    # them clearly.
+    conversation = _load_json(request.conversation, [])
+    if isinstance(conversation, list):
+        for turn in conversation:
+            if not isinstance(turn, dict):
+                continue
+
+            text = _text(turn.get("text"))
+            if not text:
+                continue
+
+            sender = turn.get("sender")
+            if sender == "user":
+                role = "user"
+            elif sender == "ai":
+                role = "assistant"
+            else:
+                continue
+
+            db.add(SupportMessage(
+                ticket_id=ticket.id,
+                sender_id=request.user_id,
+                sender_role=role,
+                body=text,
+                read_by_user=True,
+                read_by_specialist=False,
+            ))
+
+    # A special remark marking exactly where the user decided to bring
+    # in the specialist, so the thread's history is easy to navigate.
+    db.add(SupportMessage(
+        ticket_id=ticket.id,
+        sender_id=request.user_id,
+        sender_role="system",
+        body=(
+            "Specialist handoff — the user asked for help from a "
+            "BRAINOPX specialist at this point."
+        ),
+        read_by_user=True,
+        read_by_specialist=False,
+    ))
+
+    for expert in experts:
+        create_notification(
+            db,
+            user_id=expert.id,
+            title="New specialist request",
+            message=(
+                f"User {request.user_id} uploaded "
+                f"'{request.uploaded_filename or 'a file'}' and no task "
+                f"template matches it. Detected columns: {column_preview}."
+            ),
+            type="warning",
+            link="/specialist",
+        )
+
+    return len(experts)
+
+
+def _no_template_chat_reply(
+    request: ConfigurationRequest,
+    user_message: str,
+    db: Session,
+) -> Dict[str, Any]:
+    """
+    One conversational turn for a configuration request whose task
+    template does not exist yet (task_id is NULL). The AI assistant asks
+    the user for the information needed to define the task, and — when
+    the user asks for an expert — notifies in-app administrators and
+    returns specialist guidance. The same conversation stays parked on
+    the request so the user can come back and continue with the
+    assistant afterward.
+    """
+
+    history = _load_json(request.conversation, [])
+    if not isinstance(history, list):
+        history = []
+
+    uploaded_columns: List[str] = []
+    if request.uploaded_file_path:
+        try:
+            columns = extract_column_headers(request.uploaded_file_path)
+            if isinstance(columns, list):
+                uploaded_columns = [
+                    _text(column) for column in columns if _text(column)
+                ]
+        except Exception:
+            uploaded_columns = []
+
+    file_preview = _uploaded_file_preview(request)
+
+    escalated = _wants_expert(user_message)
+
+    if escalated:
+        notified = 0
+        try:
+            notified = _notify_experts(db, request, uploaded_columns)
+        except Exception as exc:
+            logger.warning("Could not notify experts: %s", exc)
+
+        expert_guidance = ""
+        try:
+            expert_guidance = get_task_definition_expert_guidance(
+                uploaded_columns,
+                request.uploaded_filename or "",
+                file_content=file_preview,
+            )
+        except GroqNetworkError:
+            expert_guidance = "Please check your network and retry."
+        except Exception:
+            expert_guidance = ""
+
+        reply = (
+            "I've notified a BRAINOPX specialist about this request"
+            if notified
+            else "This request has been marked for a BRAINOPX specialist"
+        )
+        reply += (
+            " and changed its status to **Escalation Required**."
+        )
+
+        if expert_guidance:
+            reply += (
+                "\n\nHere's the specialist's initial assessment:\n\n"
+                + expert_guidance
+            )
+        else:
+            reply += (
+                " They'll be in touch shortly — and when you're ready to "
+                "continue, just message me here and we'll pick up where we "
+                "left off."
+            )
+
+        request.status = "escalation_required"
+        request.current_stage = "with_expert"
+    else:
+        try:
+            reply = get_task_definition_chat_response(
+                user_message=user_message,
+                conversation_history=history,
+                uploaded_columns=uploaded_columns,
+                filename=request.uploaded_filename or "",
+                file_content=file_preview,
+            )
+        except GroqNetworkError:
+            reply = "Please check your network and retry."
+        except Exception as exc:
+            logger.warning("No-template chat fell back: %s", exc)
+            reply = (
+                "I want to make sure I get this right. Could you tell me "
+                "what this file is for, and which columns matter most?"
+            )
+
+    history.append(
+        {"sender": "user", "text": user_message, "timestamp": _now()}
+    )
+    history.append({"sender": "ai", "text": reply, "timestamp": _now()})
+
+    request.conversation = json.dumps(history, ensure_ascii=False)
+    db.commit()
+
+    return {
+        "request_id": request.id,
+        "user_message": user_message,
+        "ai_response": reply,
+        "user_input_valid": True,
+        "completed": False,
+        "ready_for_script": False,
+        "workflow": {},
+        "status": request.status,
+        "current_stage": request.current_stage,
+        "escalated": escalated,
+        "validation_errors": [],
+        "stats": get_validation_stats([]),
+    }
+
+
+# ============================================================================
 # MAIN CHAT ENDPOINT
 # ============================================================================
 
@@ -1995,6 +2304,19 @@ async def chat_with_assistant(
         raise HTTPException(
             status_code=404,
             detail="Request not found",
+        )
+
+    # ========================================================================
+    # NO TEMPLATE: a request opened for a file that matched no task
+    # template (task_id is NULL). Hand the turn to the task-definition
+    # assistant instead of failing with "task not found".
+    # ========================================================================
+
+    if request.task_id is None:
+        return _no_template_chat_reply(
+            request,
+            chat_request.user_message,
+            db,
         )
 
     # ========================================================================

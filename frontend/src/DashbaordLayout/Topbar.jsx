@@ -1,21 +1,17 @@
-import React, { useState, useEffect } from 'react'
-import { Box, InputBase, IconButton, Paper, Tooltip, Avatar, Badge } from '@mui/material'
+import { useState } from 'react'
+import { Box, InputBase, IconButton, Paper, Tooltip, Avatar } from '@mui/material'
 import SearchIconImport from '@mui/icons-material/Search'
 import DarkModeIconImport from '@mui/icons-material/DarkMode'
 import LightModeIconImport from '@mui/icons-material/LightMode'
-import NotificationsIconImport from '@mui/icons-material/Notifications'
 import PaletteIconImport from '@mui/icons-material/Palette'
 import { useThemeMode } from '../context/ThemeContext.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useNavigate } from 'react-router-dom'
-import { fetchUnreadCount } from '../services/NotificationService'
-import NotificationsPanel from '../components/NotificationsPanel'
 import { useDashboardCustomizer } from '../context/DashboardCustomizerContext.jsx'
 
 const SearchIcon = SearchIconImport?.default || SearchIconImport
 const DarkModeIcon = DarkModeIconImport?.default || DarkModeIconImport
 const LightModeIcon = LightModeIconImport?.default || LightModeIconImport
-const NotificationsIcon = NotificationsIconImport?.default || NotificationsIconImport
 const PaletteIcon = PaletteIconImport?.default || PaletteIconImport
 
 const Topbar = ({ onSearch, searchPlaceholder = 'Search...', sidebarWidth = 260 }) => {
@@ -25,41 +21,12 @@ const Topbar = ({ onSearch, searchPlaceholder = 'Search...', sidebarWidth = 260 
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [searchFocused, setSearchFocused] = useState(false)
-  const [unreadCount, setUnreadCount] = useState(0)
-  const [notificationsOpen, setNotificationsOpen] = useState(false)
   const searchActive = searchFocused || query.length > 0
-
-  useEffect(() => {
-    loadUnreadCount()
-    const interval = setInterval(loadUnreadCount, 30000)
-    return () => clearInterval(interval)
-  }, [])
-
-  const loadUnreadCount = async () => {
-    try {
-      const data = await fetchUnreadCount()
-      setUnreadCount(data.count)
-    } catch (err) {
-      // Silently fail
-    }
-  }
 
   const handleChange = (event) => {
     const value = event.target.value
     setQuery(value)
     if (onSearch) onSearch(value)
-  }
-
-  const handleNotificationsToggle = () => {
-    setNotificationsOpen((prev) => !prev)
-  }
-
-  const handleNotificationsClose = () => {
-    setNotificationsOpen(false)
-  }
-
-  const handleUnreadCountChange = (count) => {
-    setUnreadCount(count)
   }
 
   const initials = user?.full_name
@@ -190,36 +157,6 @@ const Topbar = ({ onSearch, searchPlaceholder = 'Search...', sidebarWidth = 260 
             {mode === 'dark' ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
           </IconButton>
         </Tooltip>
-
-        <Box sx={{ position: 'relative' }}>
-          <Tooltip title="Notifications">
-            <IconButton
-              onClick={handleNotificationsToggle}
-              sx={{
-                color: 'text.primary',
-                background: (theme) =>
-                  theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.06)' : '#ffffff',
-                border: (theme) =>
-                  `1px solid ${theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.1)' : '#e5e7eb'}`,
-                '&:hover': {
-                  background: (theme) =>
-                    theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.12)' : '#f3f4f6',
-                },
-              }}
-            >
-              <Badge badgeContent={unreadCount} color="error">
-                <NotificationsIcon fontSize="small" />
-              </Badge>
-            </IconButton>
-          </Tooltip>
-          {notificationsOpen && (
-            <NotificationsPanel
-              open={notificationsOpen}
-              onClose={handleNotificationsClose}
-              onUnreadCountChange={handleUnreadCountChange}
-            />
-          )}
-        </Box>
 
         <Tooltip title={user?.full_name || 'Profile'}>
           <Avatar

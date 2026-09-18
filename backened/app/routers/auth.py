@@ -94,6 +94,91 @@ def login_user(credentials: UserLogin, db: Session = Depends(get_db)):
     return TokenResponse(access_token=token, user=user)
 
 
+@router.post("/admin-login", response_model=TokenResponse)
+def admin_login(credentials: UserLogin, db: Session = Depends(get_db)):
+    """Admin portal sign-in.
+
+    Same credential check as /login, but the account must have the
+    "admin" or "specialist" role. A regular member account is rejected
+    here even when their email/password are correct, so the admin login
+    page can never be used to open a plain user session.
+    """
+    user = db.query(User).filter(User.email == credentials.email).first()
+
+    invalid_credentials_error = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid email or password.",
+    )
+
+    if not user:
+        raise invalid_credentials_error
+
+    if not verify_password(credentials.password, user.hashed_password):
+        raise invalid_credentials_error
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account has been deactivated.",
+        )
+
+    if user.role not in ("admin", "specialist"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This sign-in is for administrators and specialists only.",
+        )
+
+    user.last_login_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token(user_id=user.id, email=user.email)
+
+    return TokenResponse(access_token=token, user=user)
+
+
+@router.post("/user-login", response_model=TokenResponse)
+def user_login(credentials: UserLogin, db: Session = Depends(get_db)):
+    """User-only sign-in.
+
+    Same credential check as /login, but administrator accounts are
+    rejected here so the regular sign-in page can never be used to
+    open an admin session.
+    """
+    user = db.query(User).filter(User.email == credentials.email).first()
+
+    invalid_credentials_error = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid email or password.",
+    )
+
+    if not user:
+        raise invalid_credentials_error
+
+    if not verify_password(credentials.password, user.hashed_password):
+        raise invalid_credentials_error
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account has been deactivated.",
+        )
+
+    if user.role == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrators must sign in through the admin portal.",
+        )
+
+    user.last_login_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token(user_id=user.id, email=user.email)
+
+    return TokenResponse(access_token=token, user=user)
+
+
 @router.get("/me", response_model=UserResponse)
 def get_me(current_user: User = Depends(get_current_user)):
     """Example protected route: returns whoever the token belongs to."""

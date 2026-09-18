@@ -77,3 +77,72 @@ def read_data_rows(file_path: str) -> list[dict]:
 
     workbook.close()
     return data_rows
+
+
+def read_file_preview(
+    file_path: str,
+    max_rows: int = 25,
+    max_chars: int = 6000,
+) -> str:
+    """
+    Builds a compact, human-readable text preview of an uploaded Excel file
+    for the AI assistant: the column headers, the total number of data rows,
+    and the first few rows so the model can reason about actual cell values
+    instead of only header names.
+
+    Never raises — a malformed file simply yields a short "could not read"
+    note, so a chat turn can always fall back to the data it already has.
+    """
+    try:
+        workbook = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+    except Exception as e:
+        return f"(Could not read the file for preview: {e})"
+
+    try:
+        try:
+            sheet = workbook.active
+            rows_iter = sheet.iter_rows(values_only=True)
+
+            header_row = next(rows_iter, None)
+            if not header_row:
+                return "(The uploaded file appears to be empty.)"
+
+            headers = [str(cell).strip() if cell is not None else "" for cell in header_row]
+            used_headers = [header for header in headers if header]
+
+            preview_rows = []
+            total_data_rows = 0
+            for row_values in rows_iter:
+                if all(value is None or str(value).strip() == "" for value in row_values):
+                    continue
+                total_data_rows += 1
+                if len(preview_rows) < max_rows:
+                    preview_rows.append(row_values)
+        except Exception as e:
+            return f"(Could not read the file for preview: {e})"
+    finally:
+        workbook.close()
+
+    lines = [
+        "COLUMN HEADERS:",
+        ", ".join(used_headers) or "(none)",
+        "",
+        f"TOTAL DATA ROWS: {total_data_rows}",
+        "",
+        f"FIRST {len(preview_rows)} ROWS:",
+    ]
+
+    for index, row_values in enumerate(preview_rows, start=1):
+        cells = []
+        for header, value in zip(headers, row_values):
+            if not header:
+                continue
+            value_text = "" if value is None else str(value).strip()
+            cells.append(f"{header}={value_text}")
+        lines.append(f"Row {index}: " + " | ".join(cells))
+
+    text = "\n".join(lines)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n...(preview truncated)"
+
+    return text

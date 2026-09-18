@@ -4,6 +4,8 @@ import { Box } from '@mui/material'
 import { AuthProvider, useAuth } from './context/AuthContext.jsx'
 import { ThemeModeProvider } from './context/ThemeContext.jsx'
 import { DashboardCustomizerProvider, useDashboardCustomizer } from './context/DashboardCustomizerContext.jsx'
+import { AssistantChatProvider } from './context/AssistantChatContext.jsx'
+import { NotificationProvider } from './context/NotificationContext.jsx'
 
 //  Components (these are in src/components/)
 import Login from './components/authentication/Login.jsx'
@@ -26,6 +28,11 @@ import UserManagement from './pages/UserManagement.jsx'
 import Landingpage from './pages/Landingpage.jsx'
 import ForgotPassword from './pages/ForgotPassword.jsx'
 import GoogleAuthCallback from './pages/GoogleAuthCallback.jsx'
+import Support from './pages/Support.jsx'
+import Notifications from './pages/Notifications.jsx'
+import SpecialistLogin from './pages/SpecialistLogin.jsx'
+import SpecialistDashboard from './pages/SpecialistDashboard.jsx'
+import AdminLogin from './pages/AdminLogin.jsx'
 
 //  Route guard — redirects to /login if not authenticated
 const ProtectedRoute = ({ children }) => {
@@ -53,11 +60,32 @@ const AdminRoute = ({ children }) => {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />
+    return <Navigate to="/admin/login" replace />
   }
 
   if (user?.role !== 'admin') {
     return <Navigate to="/dashboard" replace />
+  }
+
+  return children
+}
+
+//  Route guard for the dedicated specialist interface. Admins may also
+//  work the specialist inbox, but a plain member is bounced to the
+//  regular sign-in for that interface.
+const SpecialistRoute = ({ children }) => {
+  const { user, isAuthenticated, isInitializing } = useAuth()
+
+  if (isInitializing) {
+    return null
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/specialist/login" replace />
+  }
+
+  if (user?.role !== 'specialist' && user?.role !== 'admin') {
+    return <Navigate to="/specialist/login" replace />
   }
 
   return children
@@ -122,13 +150,18 @@ function AppContent() {
 
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/landing" element={<Landingpage />} />
+      <AssistantChatProvider>
+        <NotificationProvider>
+          <Routes>
+          <Route path="/landing" element={<Landingpage />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/register/success" element={<RegisterSuccess />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/auth/google/callback" element={<GoogleAuthCallback />} />
+        <Route path="/specialist/login" element={<SpecialistLogin />} />
+        <Route path="/specialist" element={<SpecialistRoute><SpecialistDashboard /></SpecialistRoute>} />
+        <Route path="/admin/login" element={<AdminLogin />} />
         <Route path="/" element={<ProtectedRoute><Layout {...layoutProps}><Dashboard /></Layout></ProtectedRoute>} />
         <Route path="/dashboard" element={<ProtectedRoute><Layout {...layoutProps}><Dashboard /></Layout></ProtectedRoute>} />
         <Route path="/dashboard/request" element={<ProtectedRoute><Layout {...layoutProps}><ConfigurationIngest /></Layout></ProtectedRoute>} />
@@ -137,12 +170,18 @@ function AppContent() {
         {/* The sidebar has always linked here; the route was missing,
             so it fell through to the catch-all and redirected. */}
         <Route path="/dashboard/ai-assistant" element={<ProtectedRoute><Layout {...layoutProps}><AiAssistant /></Layout></ProtectedRoute>} />
+        {/* User-facing support threads: view and reply to specialist responses. */}
+        <Route path="/dashboard/support" element={<ProtectedRoute><Layout {...layoutProps}><Support /></Layout></ProtectedRoute>} />
+        {/* In-app notification inbox — the sidebar bell links here. */}
+        <Route path="/dashboard/notifications" element={<ProtectedRoute><Layout {...layoutProps}><Notifications /></Layout></ProtectedRoute>} />
         {/* Same situation: the sidebar has always linked to
             /dashboard/users, but nothing was registered for it. */}
         <Route path="/dashboard/users" element={<AdminRoute><Layout {...layoutProps}><UserManagement /></Layout></AdminRoute>} />
         <Route path="/profile" element={<ProtectedRoute><Layout {...layoutProps}><Profile /></Layout></ProtectedRoute>} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
-      </Routes>
+          </Routes>
+        </NotificationProvider>
+      </AssistantChatProvider>
     </BrowserRouter>
   )
 }

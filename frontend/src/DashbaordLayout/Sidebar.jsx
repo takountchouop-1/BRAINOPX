@@ -1,5 +1,4 @@
-import { useState } from 'react'
-import { Box, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Tooltip, Typography } from '@mui/material'
+import { Box, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Tooltip, Typography, Badge } from '@mui/material'
 import { alpha } from '@mui/material/styles'
 import { motion } from 'framer-motion'
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
@@ -11,9 +10,13 @@ import PeopleIconImport from '@mui/icons-material/People'
 import SettingsIconImport from '@mui/icons-material/Settings'
 import PersonIconImport from '@mui/icons-material/Person'
 import LogoutIconImport from '@mui/icons-material/Logout'
+import SupportAgentIconImport from '@mui/icons-material/SupportAgent'
+import SupervisorAccountIconImport from '@mui/icons-material/SupervisorAccount'
+import NotificationsIconImport from '@mui/icons-material/Notifications'
 import agentIcon from '../assets/agent.jpg'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useDashboardCustomizer } from '../context/DashboardCustomizerContext.jsx'
+import { useNotifications } from '../context/NotificationContext.jsx'
 import LanguageSwitcher from '../components/LanguageSwitcher.jsx'
 
 const DashboardIcon = DashboardIconImport?.default || DashboardIconImport
@@ -23,6 +26,9 @@ const PeopleIcon = PeopleIconImport?.default || PeopleIconImport
 const SettingsIcon = SettingsIconImport?.default || SettingsIconImport
 const PersonIcon = PersonIconImport?.default || PersonIconImport
 const LogoutIcon = LogoutIconImport?.default || LogoutIconImport
+const SupportAgentIcon = SupportAgentIconImport?.default || SupportAgentIconImport
+const SupervisorAccountIcon = SupervisorAccountIconImport?.default || SupervisorAccountIconImport
+const NotificationsIcon = NotificationsIconImport?.default || NotificationsIconImport
 
 // Falls back to the same blue as the "Dark" quick theme, so the
 // sidebar reads as blue-accented even before anyone opens the
@@ -34,8 +40,10 @@ const Sidebar = ({ collapsed = false }) => {
   const location = useLocation()
   const { logout, user } = useAuth()
   const { settings } = useDashboardCustomizer()
+  const { unreadCount } = useNotifications()
   const { t } = useTranslation('layout')
   const isAdmin = user?.role === 'admin'
+  const isSpecialist = user?.role === 'specialist' || user?.role === 'admin'
 
   const menuItems = [
     { text: t('sidebar.menu.dashboard'), icon: <DashboardIcon />, path: '/dashboard' },
@@ -53,12 +61,17 @@ const Sidebar = ({ collapsed = false }) => {
       ),
       path: '/dashboard/ai-assistant',
     },
+    { text: t('sidebar.menu.support'), icon: <SupportAgentIcon />, path: '/dashboard/support' },
+    { text: t('sidebar.menu.notifications'), icon: <NotificationsIcon />, path: '/dashboard/notifications', badge: unreadCount },
     { text: t('sidebar.menu.userManagement'), icon: <PeopleIcon />, path: '/dashboard/users', adminOnly: true },
     { text: t('sidebar.menu.ruleEngine'), icon: <SettingsIcon />, path: '/dashboard/rules' },
+    { text: t('sidebar.menu.specialistPortal'), icon: <SupervisorAccountIcon />, path: '/specialist', specialistOnly: true },
     { text: t('sidebar.menu.profile'), icon: <PersonIcon />, path: '/profile' },
   ]
 
-  const visibleMenuItems = menuItems.filter((item) => !item.adminOnly || isAdmin)
+  const visibleMenuItems = menuItems.filter(
+    (item) => (!item.adminOnly || isAdmin) && (!item.specialistOnly || isSpecialist)
+  )
 
   const handleLogout = () => {
     logout()
@@ -185,7 +198,24 @@ const Sidebar = ({ collapsed = false }) => {
                       justifyContent: 'center',
                     }}
                   >
-                    {item.icon}
+                    {item.badge > 0 ? (
+                      <Badge
+                        badgeContent={item.badge}
+                        color="error"
+                        sx={{
+                          '& .MuiBadge-badge': {
+                            fontSize: 10,
+                            height: 18,
+                            minWidth: 18,
+                            px: 0.5,
+                          },
+                        }}
+                      >
+                        {item.icon}
+                      </Badge>
+                    ) : (
+                      item.icon
+                    )}
                   </ListItemIcon>
                   {!collapsed && (
                     <ListItemText primary={item.text} sx={{ position: 'relative', zIndex: 1 }} />

@@ -55,6 +55,7 @@ import ChatMessage, {
   conversationBackground,
   composerBackground,
   assistantContentStyles,
+  looksLikeGuidedHtml,
   TypingIndicator,
 } from '../components/ChatMessage.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
@@ -136,6 +137,47 @@ const PROCESS_STEPS = [
   'Completed'
 ]
 
+// The request chat lives in sessionStorage so the user can leave this
+// page (check Tasks, the AI Assistant, …) and come back to the exact
+// same request conversation instead of starting over. sessionStorage is
+// cleared when the tab closes, not on navigation or reload.
+const REQUEST_SESSION_KEY = 'brainopx.configuration.request.v1'
+
+const readStoredRequestSession = () => {
+  try {
+    const raw = window.sessionStorage.getItem(REQUEST_SESSION_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && parsed.requestId != null) {
+      return parsed
+    }
+  } catch {
+    // Corrupted or unavailable storage — fall back to a fresh page.
+  }
+  return null
+}
+
+// The uploaded File object itself can't be serialized, so only the bits
+// the UI renders (name/size) are persisted; `_animate` is stripped so
+// restored messages don't replay their entrance animation.
+const writeStoredRequestSession = (snapshot) => {
+  try {
+    if (!snapshot?.requestId) {
+      window.sessionStorage.removeItem(REQUEST_SESSION_KEY)
+      return
+    }
+    const messages = Array.isArray(snapshot.chatMessages)
+      ? snapshot.chatMessages.map(({ _animate, ...rest }) => rest)
+      : []
+    window.sessionStorage.setItem(
+      REQUEST_SESSION_KEY,
+      JSON.stringify({ ...snapshot, chatMessages: messages })
+    )
+  } catch {
+    // Persistence is best-effort.
+  }
+}
+
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 
 const ConfigurationIngest = ({ searchTerm = '', setSearchTerm = () => {} }) => {
@@ -144,30 +186,48 @@ const ConfigurationIngest = ({ searchTerm = '', setSearchTerm = () => {} }) => {
   // own messages.
   const { user } = useAuth()
 
+  // Restore the previous request session (if any) so navigating back to
+  // this page resumes the same request conversation. Read once, lazily.
+  const storedSessionRef = useRef(undefined)
+  if (storedSessionRef.current === undefined) {
+    storedSessionRef.current = readStoredRequestSession()
+  }
+  const stored = storedSessionRef.current
+
   // Task Template Selection
   const [availableTasks, setAvailableTasks] = useState([])
-  const [selectedTaskId, setSelectedTaskId] = useState('')
+  const [selectedTaskId, setSelectedTaskId] = useState(stored?.selectedTaskId ?? '')
   const [tasksLoading, setTasksLoading] = useState(true)
 
   // Active Configuration Request State
-  const [requestId, setRequestId] = useState(null)
-  const [requestStatus, setRequestStatus] = useState('draft')
-  const [uploadedFile, setUploadedFile] = useState(null)
+  const [requestId, setRequestId] = useState(stored?.requestId ?? null)
+  const [requestStatus, setRequestStatus] = useState(stored?.requestStatus ?? 'draft')
+  // Whose turn it is in the chat: 'with_assistant' or 'with_expert'
+  // (set when a no-template request is escalated to a specialist).
+  const [currentStage, setCurrentStage] = useState(stored?.currentStage ?? 'draft')
+  const [uploadedFile, setUploadedFile] = useState(
+    stored?.uploadedFileMeta ? { name: stored.uploadedFileMeta.name, size: stored.uploadedFileMeta.size } : null
+  )
   const [isDragging, setIsDragging] = useState(false)
   const [uploadError, setUploadError] = useState(null)
   const [isUploading, setIsUploading] = useState(false)
   // Where the uploaded file itself lives on the server — lets the user
   // open/download it, fix a flagged cell directly in Excel, and send
   // the corrected file back via resubmitCorrectedFile below.
-  const [fileUrl, setFileUrl] = useState(null)
+  const [fileUrl, setFileUrl] = useState(stored?.fileUrl ?? null)
   const [isResubmittingFile, setIsResubmittingFile] = useState(false)
   const resubmitFileInputRef = useRef(null)
 
   // Validation Errors from Backend Rules Engine
-  const [validationErrors, setValidationErrors] = useState([])
+  const [validationErrors, setValidationErrors] = useState(stored?.validationErrors ?? [])
 
   // Add this with your other state declarations
-const [matchInfo, setMatchInfo] = useState(null)
+const [matchInfo, setMatchInfo] = useState(stored?.matchInfo ?? null)
+
+  // True when the uploaded file matched no task template at all — the
+  // AI assistant takes over to help define the missing task (and can
+  // escalate to an expert), instead of the manual-selection dialog.
+  const [noTemplate, setNoTemplate] = useState(stored?.noTemplate ?? false)
 
   // Manual template selection — shown when the backend's auto-match
   // (column-header similarity, see template_matcher.py) can't confidently
@@ -178,10 +238,10 @@ const [matchInfo, setMatchInfo] = useState(null)
   const [isUploadingWithTemplate, setIsUploadingWithTemplate] = useState(false)
 
   // Stats state
-  const [stats, setStats] = useState({ total: 0, solved: 0, remaining: 0, progress: 0 })
+  const [stats, setStats] = useState(stored?.stats ?? { total: 0, solved: 0, remaining: 0, progress: 0 })
 
   // Generated Script from Backend
-  const [generatedScript, setGeneratedScript] = useState(null)
+  const [generatedScript, setGeneratedScript] = useState(stored?.generatedScript ?? null)
   const [isGeneratingScript, setIsGeneratingScript] = useState(false)
   const [scriptGenError, setScriptGenError] = useState(null)
 
@@ -190,7 +250,7 @@ const [matchInfo, setMatchInfo] = useState(null)
   // incomplete relationship), each resolved by a correction, a
   // reference file, or (conflicts/incomplete relationships) a
   // decision.
-  const [anomalies, setAnomalies] = useState([])
+  const [anomalies, setAnomalies] = useState(stored?.anomalies ?? [])
   const [isSubmittingReferenceFile, setIsSubmittingReferenceFile] = useState(false)
   const [isSubmittingDecision, setIsSubmittingDecision] = useState(false)
   const [correctionDrafts, setCorrectionDrafts] = useState({}) // { [anomalyId]: text }
@@ -199,8 +259,8 @@ const [matchInfo, setMatchInfo] = useState(null)
   // values here in chat, or by reopening the Excel file and resubmitting
   // it — asked once via the card rendered when needsCorrectionModeChoice
   // is true, then remembered for the rest of the request.
-  const [correctionMode, setCorrectionMode] = useState(null)
-  const [needsCorrectionModeChoice, setNeedsCorrectionModeChoice] = useState(false)
+  const [correctionMode, setCorrectionMode] = useState(stored?.correctionMode ?? null)
+  const [needsCorrectionModeChoice, setNeedsCorrectionModeChoice] = useState(stored?.needsCorrectionModeChoice ?? false)
   const [isSubmittingCorrectionMode, setIsSubmittingCorrectionMode] = useState(false)
   // Which open anomaly the next attached file resolves — set by the
   // "Attach production extract" button on that anomaly's card, so
@@ -208,12 +268,12 @@ const [matchInfo, setMatchInfo] = useState(null)
   const [referenceFileAnomalyId, setReferenceFileAnomalyId] = useState(null)
 
   // Conversational Chat State
-  const [chatMessages, setChatMessages] = useState([])
+  const [chatMessages, setChatMessages] = useState(stored?.chatMessages ?? [])
   const [chatInput, setChatInput] = useState('')
   const [isChatLoading, setIsChatLoading] = useState(false)
 const [pendingFile, setPendingFile] = useState(null)
   const [welcomeLoading, setWelcomeLoading] = useState(false)
-  const [stepProgress, setStepProgress] = useState(null)
+  const [stepProgress, setStepProgress] = useState(stored?.stepProgress ?? null)
 
   // Set once the AI has asked for a file/screenshot after several
   // confused turns on the current step (see guided_engine.py). While
@@ -246,6 +306,12 @@ const [pendingFile, setPendingFile] = useState(null)
   const composerInputRef = useRef(null)
   const chatFileInputRef = useRef(null)
 
+  // Mirrors of state read by effects without adding them as dependencies.
+  const requestIdRef = useRef(stored?.requestId ?? null)
+  // Tracks the last selected task so the task-selection effect only reacts
+  // to real dropdown changes, not the initial (possibly restored) value.
+  const prevSelectedTaskIdRef = useRef(stored?.selectedTaskId ?? '')
+
   // Filter available tasks based on search term
   const filteredTasks = availableTasks.filter((task) => {
     const searchLower = searchTerm.toLowerCase()
@@ -265,6 +331,13 @@ const [pendingFile, setPendingFile] = useState(null)
 
   // ─── TASK SELECTION: AI responds instantly ────────────────────────────────
   useEffect(() => {
+    // Only react to actual dropdown changes. On mount (or after a restore)
+    // the value is unchanged, so this never reseeds/clears an existing
+    // request conversation just because the page remounted.
+    const changed = selectedTaskId !== prevSelectedTaskIdRef.current
+    prevSelectedTaskIdRef.current = selectedTaskId
+    if (!changed) return
+
     if (!selectedTaskId) {
       // No task selected → clear chat
       setChatMessages([])
@@ -361,6 +434,55 @@ const fetchWelcome = async () => {
     return () => clearInterval(pollRef.current)
   }, [requestId, requestStatus])
 
+  // Keep the ref in sync so other effects can check for an active request
+  // without having to depend on requestId (which would re-trigger them).
+  useEffect(() => {
+    requestIdRef.current = requestId
+  }, [requestId])
+
+  // Mirror the request chat to sessionStorage so leaving the page and
+  // coming back resumes the exact same conversation. The entry is removed
+  // once the request is reset/cleared.
+  useEffect(() => {
+    writeStoredRequestSession({
+      requestId,
+      requestStatus,
+      currentStage,
+      selectedTaskId,
+      chatMessages,
+      noTemplate,
+      stepProgress,
+      validationErrors,
+      stats,
+      matchInfo,
+      anomalies,
+      generatedScript,
+      correctionMode,
+      needsCorrectionModeChoice,
+      fileUrl,
+      uploadedFileMeta: uploadedFile
+        ? { name: uploadedFile.name, size: uploadedFile.size }
+        : null,
+    })
+  }, [
+    requestId,
+    requestStatus,
+    currentStage,
+    selectedTaskId,
+    chatMessages,
+    noTemplate,
+    stepProgress,
+    validationErrors,
+    stats,
+    matchInfo,
+    anomalies,
+    generatedScript,
+    correctionMode,
+    needsCorrectionModeChoice,
+    fileUrl,
+    uploadedFile,
+  ])
+
 
 
   
@@ -395,6 +517,8 @@ const fetchWelcome = async () => {
     setChatMessages(data.conversation || [])
     setUploadedFile(file)
     setFileUrl(data.file_url || null)
+    setNoTemplate(Boolean(data.no_template))
+    setCurrentStage(data.current_stage || 'with_assistant')
 
     if (data.match_summary) {
       setMatchInfo({
@@ -509,6 +633,69 @@ const uploadFile = async (file) => {
     setPendingUploadFile(null)
   }
 
+  // None of the listed templates fit — hand the file to the AI assistant
+  // anyway so it still gets analysed and the missing task can be defined
+  // (and, if asked, escalated to an expert), instead of dropping it.
+  const uploadWithoutTemplate = async () => {
+    if (!pendingUploadFile || isUploadingWithTemplate) return
+    setIsUploadingWithTemplate(true)
+    setUploadError(null)
+
+    const formData = new FormData()
+    formData.append('file', pendingUploadFile)
+
+    try {
+      const token = localStorage.getItem('brainopx_token')
+      const resp = await fetch(`${API_BASE}/api/requests/upload-without-template`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      })
+
+      if (!resp.ok) {
+        const payload = await resp.json().catch(() => null)
+        throw new Error(payload?.detail || 'File upload failed.')
+      }
+
+      const data = await resp.json()
+      applyUploadResponse(data, pendingUploadFile)
+      setShowTemplateSelection(false)
+      setAvailableTemplates([])
+      setPendingUploadFile(null)
+    } catch (err) {
+      setUploadError(err.message)
+    } finally {
+      setIsUploadingWithTemplate(false)
+    }
+  }
+
+  // Switch a no-template request back from the specialist to the AI
+  // assistant, so the user can keep chatting once they are done with
+  // the expert.
+  const resumeAssistant = async () => {
+    if (!requestId) return
+    try {
+      const token = localStorage.getItem('brainopx_token')
+      const resp = await fetch(`${API_BASE}/api/requests/${requestId}/resume-assistant`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+
+      if (resp.ok) {
+        const data = await resp.json()
+        setRequestStatus(data.status)
+        setCurrentStage(data.current_stage || 'with_assistant')
+        if (data.conversation) setChatMessages(data.conversation)
+        fetchRequestState(requestId)
+      } else {
+        const payload = await resp.json().catch(() => null)
+        setUploadError(payload?.detail || 'Could not switch back to the assistant.')
+      }
+    } catch (err) {
+      console.error('Resume assistant failed:', err)
+    }
+  }
+
   const fetchRequestState = useCallback(async (id) => {
     // A chat send is in flight: its own response handler will apply the
     // fresh conversation once the assistant replies. Skip this poll tick
@@ -524,6 +711,7 @@ const uploadFile = async (file) => {
       if (resp.ok) {
         const data = await resp.json()
         setRequestStatus(data.status)
+        if (data.current_stage) setCurrentStage(data.current_stage)
         setValidationErrors(data.validation_errors || [])
         setChatMessages(data.conversation || [])
         if (data.generated_script) setGeneratedScript(data.generated_script)
@@ -538,6 +726,30 @@ const uploadFile = async (file) => {
       console.error('Polling failed:', err)
     }
   }, [])
+
+  // Restore the request conversation after navigating back to this page:
+  // the state above is already rehydrated from sessionStorage, and this
+  // refreshes it from the backend so any assistant turns that completed
+  // while the user was away show up as well.
+  useEffect(() => {
+    const restoredId = storedSessionRef.current?.requestId
+    if (!restoredId) return
+
+    fetchRequestState(restoredId)
+
+    // get_request doesn't include the guided-workflow progress, so pull it
+    // from its own endpoint to keep the step bar and composer routing
+    // accurate.
+    const token = localStorage.getItem('brainopx_token')
+    fetch(`${API_BASE}/api/requests/${restoredId}/step-progress`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((resp) => (resp.ok ? resp.json() : null))
+      .then((progress) => {
+        if (progress) setStepProgress(progress)
+      })
+      .catch(() => {})
+  }, [fetchRequestState])
 
   // Helper function to update stats
   const updateStats = (errors) => {
@@ -914,6 +1126,7 @@ const sendChatMessage = async (e) => {
         
         // Update other state
         if (data.status) setRequestStatus(data.status)
+        if (data.current_stage) setCurrentStage(data.current_stage)
         if (data.validation_errors) setValidationErrors(data.validation_errors)
         if (data.generated_script) setGeneratedScript(data.generated_script)
         
@@ -1132,6 +1345,7 @@ const sendChatMessage = async (e) => {
     clearInterval(pollRef.current)
     setRequestId(null)
     setRequestStatus('draft')
+    setCurrentStage('draft')
     setUploadedFile(null)
     setUploadError(null)
     setValidationErrors([])
@@ -1144,6 +1358,7 @@ const sendChatMessage = async (e) => {
     setShowTemplateSelection(false)
     setAvailableTemplates([])
     setPendingUploadFile(null)
+    setNoTemplate(false)
   }
 
   // ─── DRAG & DROP HANDLERS ─────────────────────────────────────────────────────
@@ -1787,15 +2002,37 @@ const sendChatMessage = async (e) => {
             }}>
               <ChatIcon color="primary" />
               <Box sx={{ flex: 1 }}>
-                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>BRAINOPX AI Assistant</Typography>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                  {currentStage === 'with_expert' ? 'BRAINOPX Specialist' : 'BRAINOPX AI Assistant'}
+                </Typography>
                 <Typography variant="caption" sx={{ color: 'text.secondary' }}>
                   {requestStatus === 'draft'
                     ? 'Upload a file to begin'
-                    : `Context: ${statusConfig.label}`}
+                    : currentStage === 'with_expert'
+                      ? 'Context: Escalated to expert'
+                      : `Context: ${statusConfig.label}`}
                 </Typography>
               </Box>
               {isChatLoading && <CircularProgress size={14} />}
             </Box>
+
+            {noTemplate && (
+              <Alert
+                severity={currentStage === 'with_expert' ? 'info' : 'warning'}
+                sx={{ mx: 2, mt: 2 }}
+                action={
+                  currentStage === 'with_expert' ? (
+                    <Button color="inherit" size="small" onClick={resumeAssistant}>
+                      Back to AI assistant
+                    </Button>
+                  ) : undefined
+                }
+              >
+                {currentStage === 'with_expert'
+                  ? 'You are now talking with a BRAINOPX specialist. When you are done, switch back to the AI assistant to continue.'
+                  : 'No task template matched this file, so the assistant is helping define it. Answer its questions — or type "expert" to hand it to a specialist.'}
+              </Alert>
+            )}
 
             <Box
               onScroll={handleChatScroll}
@@ -1844,7 +2081,7 @@ const sendChatMessage = async (e) => {
                     text={msg.text || msg.content}
                     timestamp={msg.timestamp}
                     validated={msg.validated}
-                    html={msg.sender === 'ai'}
+                    html={msg.sender === 'ai' && looksLikeGuidedHtml(msg.text || msg.content)}
                     user={user}
                     animate={Boolean(msg._animate)}
                   />
@@ -1854,8 +2091,9 @@ const sendChatMessage = async (e) => {
               {/* Asked once, the first time an open anomaly appears: does
                   the user want to type corrected values here in chat, or
                   reopen the Excel file, fix it there, and resubmit it for
-                  another check? Reference-file/update/ignore actions below
-                  aren't gated on this — only the plain correction field is. */}
+                  another check? The answer gates every action card below —
+                  the user responds first, and the matching fix blocks only
+                  appear afterwards. */}
               {needsCorrectionModeChoice && (
                 <Paper
                   variant="outlined"
@@ -1889,9 +2127,13 @@ const sendChatMessage = async (e) => {
                 </Paper>
               )}
 
-              {/* Conflicts found between the upload and a reference file:
-                  each needs an explicit update-vs-ignore decision before
-                  the request can move on. */}
+              {/* Only once the user has answered the chat-vs-Excel question
+                  are the individual action cards revealed below. */}
+              {!needsCorrectionModeChoice && (
+                <>
+                  {/* Conflicts found between the upload and a reference file:
+                      each needs an explicit update-vs-ignore decision before
+                      the request can move on. */}
               {anomalies.filter((a) => a.status === 'open' && a.kind === 'conflict').map((a) => (
                 <Paper
                   key={a.id}
@@ -2036,6 +2278,8 @@ const sendChatMessage = async (e) => {
                   </Stack>
                 </Paper>
               ))}
+                </>
+              )}
 
               {/* Task just selected/launched — the welcome message is
                   still in flight, so the assistant shows as thinking
@@ -2345,7 +2589,14 @@ const sendChatMessage = async (e) => {
             </Box>
           )}
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ justifyContent: 'space-between', px: 3, pb: 2 }}>
+          <Button
+            onClick={uploadWithoutTemplate}
+            disabled={isUploadingWithTemplate}
+            sx={{ textTransform: 'none' }}
+          >
+            None of these fit — let the assistant help
+          </Button>
           <Button onClick={cancelTemplateSelection} disabled={isUploadingWithTemplate}>Cancel</Button>
         </DialogActions>
       </Dialog>

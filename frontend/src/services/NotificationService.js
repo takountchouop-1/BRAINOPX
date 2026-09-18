@@ -46,3 +46,12 @@ export const markAllAsRead = async () => {
   return handleResponse(response)
 }
 
+export const deleteNotification = async (notificationId) => {
+  const token = getAuthToken()
+  const response = await fetch(`${API_BASE_URL}/notifications/${notificationId}`, {
+    method: 'DELETE',
+    headers: { 'Authorization': `Bearer ${token}` }
+  })
+  return handleResponse(response)
+}
+

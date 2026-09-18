@@ -59,7 +59,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000
 const Login = () => {
   const { t } = useTranslation('components')
   const navigate = useNavigate()
-  const { login } = useAuth()
+  const { loginUser } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [rememberMe, setRememberMe] = useState(false)
@@ -108,9 +108,10 @@ const Login = () => {
 
     setIsLoading(true)
     try {
-      // useAuth().login() handles storing the token/user under the single
+      // useAuth().loginUser() hits /api/auth/user-login, which rejects
+      // admin accounts, then stores the token/user under the single
       // shared key ('brainopx_token') that the rest of the app reads from.
-      await login({ email, password })
+      await loginUser({ email, password })
       setStatus(t('login.signedInSuccess'))
 
       if (rememberMe) {

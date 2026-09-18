@@ -11,7 +11,8 @@ import json
 
 ROLE_ADMIN = "admin"
 ROLE_MEMBER = "member"
-ROLES = (ROLE_ADMIN, ROLE_MEMBER)
+ROLE_SPECIALIST = "specialist"
+ROLES = (ROLE_ADMIN, ROLE_MEMBER, ROLE_SPECIALIST)
 
 ACCESS_DATA_EXPORT = "data_export"
 ACCESS_DATA_IMPORT = "data_import"
@@ -66,6 +67,8 @@ def display_tags(role: str, access) -> list[str]:
 
     if role == ROLE_ADMIN:
         tags.append("Admin")
+    elif role == ROLE_SPECIALIST:
+        tags.append("Specialist")
 
     parsed = access if isinstance(access, list) else parse_access(access)
 

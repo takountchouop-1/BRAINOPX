@@ -64,3 +64,21 @@ def get_current_admin_user(
         )
 
     return current_user
+
+
+def get_current_specialist_user(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """
+    Dependency for the specialist interface. Admins count too — an
+    administrator is a super-set of a specialist — but a plain member
+    is refused.
+    """
+
+    if current_user.role not in ("specialist", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This action requires a specialist account.",
+        )
+
+    return current_user

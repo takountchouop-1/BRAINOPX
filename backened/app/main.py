@@ -9,7 +9,7 @@ from app.api.endpoints import chat
 from app.db.database import engine, Base
 from fastapi.staticfiles import StaticFiles
 from app.db import models   # noqa: F401 — ensures models are registered before create_all
-from app.routers import auth, tasks, requests, users, notifications, skill_engine, assistant
+from app.routers import auth, tasks, requests, users, notifications, skill_engine, assistant, support
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ app.include_router(users.router)
 app.include_router(notifications.router)
 app.include_router(skill_engine.router)
 app.include_router(assistant.router)
+app.include_router(support.router)
 app.include_router(chat.router, prefix="/api")
 
 

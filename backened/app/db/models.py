@@ -86,10 +86,14 @@ class ConfigurationRequest(Base):
     __tablename__ = "configuration_requests"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    # Nullable so an upload whose task template doesn't exist yet can still
+    # open a configuration request and let the AI assistant gather the task
+    # definition (and, if asked, escalate to an expert) instead of leaving
+    # the user at a dead end. See app/services/task_definition_service.py.
     task_id = Column(
         Integer, 
         ForeignKey("configuration_tasks.id", ondelete="CASCADE"),
-        nullable=False
+        nullable=True
     )
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
@@ -364,6 +368,75 @@ class AssistantAttachment(Base):
     size_bytes = Column(Integer, nullable=True)
     extracted_text = Column(Text, nullable=True)
     extractable = Column(Boolean, default=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class SupportTicket(Base):
+    """
+    One help request from a user, worked by a specialist in the
+    dedicated specialist interface.
+
+    A ticket owns a two-way thread of SupportMessage rows: the user
+    writes on one side, a specialist replies on the other. Tickets are
+    a shared inbox — every active specialist sees every ticket — so
+    there is no hard assignment; `claimed_by` only records who is
+    currently working it.
+    """
+
+    __tablename__ = "support_tickets"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    # The configuration request that triggered the escalation, when one
+    # exists (a no-template upload escalates from a request; a user can
+    # also open a support thread directly).
+    request_id = Column(
+        Integer,
+        ForeignKey("configuration_requests.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    subject = Column(String(200), nullable=False)
+    status = Column(String(20), nullable=False, default="open", server_default="open")
+    claimed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    resolved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class SupportMessage(Base):
+    """
+    One message inside a SupportTicket's thread. `sender_role` is
+    "user", "specialist", "assistant" (a replayed AI assistant turn) or
+    "system" (a marker such as the specialist-handoff point); the two
+    read flags let each side track what it hasn't seen yet without
+    needing two separate mailboxes.
+    """
+
+    __tablename__ = "support_messages"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    ticket_id = Column(
+        Integer,
+        ForeignKey("support_tickets.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    sender_role = Column(String(20), nullable=False)  # "user" | "specialist"
+    body = Column(Text, nullable=False)
+
+    read_by_user = Column(Boolean, default=False)
+    read_by_specialist = Column(Boolean, default=False)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

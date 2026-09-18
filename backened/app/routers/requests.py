@@ -17,7 +17,16 @@ from ..services.excel_service import extract_column_headers, read_data_rows
 from ..services.validation_service import validate_data_rows, infer_column_rules
 from ..services import validation_service
 from ..services.template_matcher import auto_match_template, get_all_templates, get_match_summary
-from ..services.groq_service import get_ai_response, get_rule_aware_response, run_rule_workflow, parse_rules_to_json, generate_workflow_script, GroqNetworkError
+from ..services.groq_service import (
+    get_ai_response,
+    get_rule_aware_response,
+    run_rule_workflow,
+    parse_rules_to_json,
+    generate_workflow_script,
+    build_no_template_welcome_message,
+    GroqNetworkError,
+)
+from ..services.notification_service import create_notification
 from ..services.rule_parser import extract_text
 from ..services.skill_engine_service import (
     get_rules_for_task,
@@ -373,6 +382,66 @@ def get_task_welcome(
     }
 
 
+def _open_no_template_request(
+    db: Session,
+    current_user: User,
+    saved_path: str,
+    filename: str,
+    match_score: float = 0.0,
+) -> dict:
+    """
+    Open a configuration request with no task attached (task_id NULL) for
+    a file that has no task template. The AI assistant takes over the
+    conversation to ask what the task should be — and can escalate to an
+    expert from there. Shared by /upload (no templates at all) and
+    /upload-without-template (user decided none of the existing templates
+    fit).
+    """
+
+    uploaded_columns = extract_column_headers(saved_path)
+    language = getattr(current_user, "language", "en") or "en"
+    welcome = build_no_template_welcome_message(
+        uploaded_columns, filename, language
+    )
+    conversation = [{
+        "sender": "ai",
+        "text": welcome,
+        "timestamp": datetime.now().isoformat(),
+    }]
+
+    new_request = ConfigurationRequest(
+        task_id=None,
+        user_id=current_user.id,
+        status="additional_information_required",
+        uploaded_filename=filename,
+        uploaded_file_path=saved_path,
+        validation_errors=None,
+        eval_profile=None,
+        conversation=json.dumps(conversation),
+    )
+    db.add(new_request)
+    db.commit()
+    db.refresh(new_request)
+
+    return {
+        "id": new_request.id,
+        "task_id": None,
+        "task_name": None,
+        "status": new_request.status,
+        "current_stage": new_request.current_stage,
+        "validation_errors": [],
+        "rule_results": [],
+        "ai_welcome_message": welcome,
+        "conversation": conversation,
+        "step_progress": None,
+        "match_score": match_score,
+        "match_summary": None,
+        "no_template": True,
+        "uploaded_file": filename,
+        "file_url": _file_url(saved_path),
+    }
+
+
 @router.post("/upload")
 def upload_file(
     file: UploadFile = File(...),
@@ -404,8 +473,9 @@ def upload_file(
     # Get all templates for fallback
     all_templates = get_all_templates(db)
     
-    # If no match found, return templates for manual selection
-    if not matched_task:
+    # No confident auto-match, but templates do exist — let the user pick
+    # the right one by hand instead of guessing.
+    if not matched_task and all_templates:
         return {
             "error": "No matching template found",
             "match_score": match_score,
@@ -414,6 +484,19 @@ def upload_file(
             "uploaded_file_path": saved_path,
             "requires_manual_selection": True
         }
+    
+    # No task template exists in the database at all. Don't dead-end the
+    # user: open a configuration request with no task attached and let the
+    # AI assistant ask what the task should be (and, if asked, escalate to
+    # an expert). The same conversation then continues when they come back.
+    if not matched_task:
+        return _open_no_template_request(
+            db,
+            current_user,
+            saved_path,
+            file.filename,
+            match_score,
+        )
     
     # Extract data rows from the file
     df = pd.read_excel(saved_path, dtype=str)
@@ -573,6 +656,40 @@ def upload_file(
         "uploaded_file": file.filename,
         "file_url": _file_url(saved_path),
     }
+
+
+@router.post("/upload-without-template")
+def upload_file_without_template(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Upload an Excel file that the user says matches none of the existing
+    task templates. Opens a no-template request so the AI assistant can
+    still analyse the file and help define the missing task (and, if
+    asked, escalate to an expert) — the same fallback /upload uses when
+    there are no templates at all.
+    """
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in {".xlsx", ".xls", ".csv"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only .xlsx, .xls, or .csv files are supported.",
+        )
+
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+    saved_path = os.path.join(UPLOAD_DIR, unique_name)
+
+    with open(saved_path, "wb") as buffer:
+        buffer.write(file.file.read())
+
+    return _open_no_template_request(
+        db,
+        current_user,
+        saved_path,
+        file.filename,
+    )
 
 
 @router.post("/upload-with-template")
@@ -1729,6 +1846,57 @@ def get_request(
         "file_url": _file_url(request.uploaded_file_path),
         "created_at": request.created_at,
         "updated_at": request.updated_at,
+    }
+
+
+@router.post("/{request_id}/resume-assistant")
+def resume_assistant(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Switch a no-template request back from the specialist to the AI
+    assistant, so the user can keep chatting with the assistant once
+    they are done with the expert.
+    """
+    request = _get_request_or_404(db, request_id)
+
+    if request.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only resume your own requests.",
+        )
+
+    if request.task_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This request already has a task template.",
+        )
+
+    request.current_stage = "with_assistant"
+    request.status = "additional_information_required"
+
+    conversation = []
+    if request.conversation:
+        try:
+            conversation = json.loads(request.conversation)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            conversation = []
+    conversation.append({
+        "sender": "ai",
+        "text": "Back with the AI assistant — how can I help you continue?",
+        "timestamp": datetime.now().isoformat(),
+    })
+    request.conversation = json.dumps(conversation)
+
+    db.commit()
+
+    return {
+        "id": request.id,
+        "status": request.status,
+        "current_stage": request.current_stage,
+        "conversation": conversation,
     }
 
 

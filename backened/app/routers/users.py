@@ -218,7 +218,15 @@ def delete_user(
     here rather than assumed away.
     """
 
-    from ..db.models import ConfigurationRequest, ConfigurationTask, Notification, SkillEngineRun, GuidedSession
+    from ..db.models import (
+        ConfigurationRequest,
+        ConfigurationTask,
+        Notification,
+        SkillEngineRun,
+        GuidedSession,
+        SupportMessage,
+        SupportTicket,
+    )
 
     target = db.query(User).filter(User.id == user_id).first()
 
@@ -259,6 +267,19 @@ def delete_user(
     )
 
     db.query(Notification).filter(Notification.user_id == target.id).delete()
+
+    # Support threads are the target's own work, not system history —
+    # remove them rather than block the deletion. The ticket's messages
+    # cascade with the ticket itself, and any ticket the target was
+    # merely claimed-by/resolved-by on has that pointer cleared.
+    db.query(SupportMessage).filter(SupportMessage.sender_id == target.id).delete()
+    db.query(SupportTicket).filter(SupportTicket.user_id == target.id).delete()
+    db.query(SupportTicket).filter(SupportTicket.claimed_by == target.id).update(
+        {"claimed_by": None}
+    )
+    db.query(SupportTicket).filter(SupportTicket.resolved_by == target.id).update(
+        {"resolved_by": None}
+    )
 
     if target.profile_picture:
         old_path = os.path.join(UPLOAD_DIR, target.profile_picture)

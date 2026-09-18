@@ -39,6 +39,7 @@ import CheckIconImport from '@mui/icons-material/Check'
 import ExpandMoreIconImport from '@mui/icons-material/ExpandMore'
 
 import { useAuth } from '../context/AuthContext.jsx'
+import { useAssistantChat } from '../context/AssistantChatContext.jsx'
 import ChatMessage, { TypingIndicator, conversationBackground, composerBackground } from '../components/ChatMessage.jsx'
 import {
   sendAssistantMessage,
@@ -115,13 +116,22 @@ const AiAssistant = () => {
   const firstName = (user?.full_name || t('aiAssistant.firstNameFallback')).split(' ')[0]
 
   const [conversations, setConversations] = useState([])
-  const [conversationId, setConversationId] = useState(null)
-  const [messages, setMessages] = useState([])
-  const [input, setInput] = useState('')
+  const {
+    conversationId,
+    setConversationId,
+    messages,
+    setMessages,
+    input,
+    setInput,
+    selectedTask,
+    setSelectedTask,
+    pendingAttachments,
+    setPendingAttachments,
+    resetConversation,
+  } = useAssistantChat()
   const [sending, setSending] = useState(false)
 
   const [tasks, setTasks] = useState([])
-  const [selectedTask, setSelectedTask] = useState(null)
   const [contextAnchor, setContextAnchor] = useState(null)
   const [contextSearch, setContextSearch] = useState('')
   const [contextExpanded, setContextExpanded] = useState(false)
@@ -130,7 +140,6 @@ const AiAssistant = () => {
   const [historyAnchor, setHistoryAnchor] = useState(null)
   const [historySearch, setHistorySearch] = useState('')
 
-  const [pendingAttachments, setPendingAttachments] = useState([])
   const [uploadingAttachment, setUploadingAttachment] = useState(false)
   const [exportAnchor, setExportAnchor] = useState(null)
   const [exporting, setExporting] = useState(false)
@@ -186,9 +195,7 @@ const AiAssistant = () => {
   useEffect(() => () => clearTimeout(contextCloseTimerRef.current), [])
 
   const startNewChat = () => {
-    setConversationId(null)
-    setMessages([])
-    setSelectedTask(null)
+    resetConversation()
   }
 
   const openConversation = async (conversation) => {

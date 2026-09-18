@@ -56,6 +56,7 @@ import ChatMessage, {
   conversationBackground,
   composerBackground,
   assistantContentStyles,
+  looksLikeGuidedHtml,
   TypingDots,
 } from '../components/ChatMessage.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
@@ -1192,7 +1193,7 @@ placeholder="e.g. What do I need to do for the security policy?"
                         text={msg.text}
                         timestamp={msg.timestamp}
                         validated={msg.validated}
-                        html={msg.sender === 'ai'}
+                        html={msg.sender === 'ai' && looksLikeGuidedHtml(msg.text)}
                         user={user}
                       />
                     ))}

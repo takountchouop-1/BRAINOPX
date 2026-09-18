@@ -424,6 +424,7 @@
     "accessDataImport": "Import de données",
     "roleAdmin": "Administrateur",
     "roleMember": "Membre",
+    "roleSpecialist": "Spécialiste",
     "errorAdminOnly": "Seuls les administrateurs peuvent consulter la liste des utilisateurs.",
     "errorLoadUsersStatus": "Impossible de charger les utilisateurs ({{status}}).",
     "errorLoadUsersDefault": "Impossible de charger les utilisateurs.",
@@ -496,5 +497,37 @@
     "credentialsShownOnce": "Ce mot de passe ne sera affiché qu'une seule fois.",
     "copy": "Copier le mot de passe",
     "done": "Terminé"
+  },
+  "support": {
+    "title": "Assistance",
+    "subtitle": "Échangez avec un spécialiste BRAINOPX et suivez vos demandes.",
+    "newRequest": "Nouvelle demande",
+    "noRequestsTitle": "Aucune demande d'assistance",
+    "noRequestsBody": "Ouvrez une demande lorsque vous avez besoin de l'aide d'un spécialiste.",
+    "selectRequest": "Sélectionnez une demande pour voir la conversation.",
+    "resolved": "Résolu",
+    "resolvedReplyHint": "Cette demande est résolue — envoyez un message pour la rouvrir.",
+    "replyPlaceholder": "Écrire une réponse…",
+    "newRequestTitle": "Nouvelle demande d'assistance",
+    "subjectLabel": "Objet",
+    "messageLabel": "Message",
+    "messagePlaceholder": "Décrivez ce dont vous avez besoin…",
+    "cancel": "Annuler",
+    "send": "Envoyer",
+    "sending": "Envoi…"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "subtitle": "Vos messages et votre activité, au même endroit.",
+    "markAllRead": "Tout marquer comme lu",
+    "noNotifications": "Aucune notification pour le moment",
+    "unread": "Nouveau",
+    "justNow": "À l'instant",
+    "minutesAgo_one": "Il y a {{count}} minute",
+    "minutesAgo_other": "Il y a {{count}} minutes",
+    "hoursAgo_one": "Il y a {{count}} heure",
+    "hoursAgo_other": "Il y a {{count}} heures",
+    "daysAgo_one": "Il y a {{count}} jour",
+    "daysAgo_other": "Il y a {{count}} jours"
   }
 }
